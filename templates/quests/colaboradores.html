@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h4 mb-3">Colaboradores de: {{ quest.nombre }}</h1>
+
+<p class="text-muted">Solo el creador del reto puede gestionar colaboradores.</p>
+
+<div class="row">
+  <div class="col-md-6 mb-4">
+    <h5 class="mb-3">Invitar colaborador por correo</h5>
+    <form method="post" class="qc-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="mb-3">
+        <label class="form-label">Correo del colaborador</label>
+        <input
+          type="email"
+          name="correo"
+          class="form-control form-control-lg {% if error_correo %}is-invalid{% endif %}"
+          required
+          maxlength="150"
+          placeholder="usuario@dominio.com"
+          value="{{ request.form.correo or '' }}"
+          pattern="[^@]+@[^@]+\.[^@]+">
+        <div class="invalid-feedback">
+          {{ error_correo or 'Ingresa un correo electrónico válido (por ejemplo: usuario@dominio.com).' }}
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-lg">Agregar colaborador</button>
+      <a href="{{ url_for('detalle_quest', quest_id=quest.id) }}" class="btn btn-link">Volver al reto</a>
+    </form>
+  </div>
+
+  <div class="col-md-6 mb-4">
+    <h5>Lista de participantes</h5>
+    {% if participaciones %}
+      <ul class="list-group">
+        {% for p in participaciones %}
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+          <span>
+            {{ p.usuario.nombre }}<br>
+            <small class="text-muted">{{ p.usuario.correo }}</small>
+          </span>
+          <span class="badge bg-secondary text-capitalize">{{ p.rol }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="text-muted">Por ahora solo tú participas en este reto.</p>
+    {% endif %}
+  </div>
+</div>
+ 
+{% endblock %}

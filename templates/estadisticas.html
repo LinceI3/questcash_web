@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="mb-4">
+  <h1 class="h4 fw-bold mb-1">Estadísticas de ahorro </h1>
+  <p class="text-muted mb-0">
+    Visualiza tu avance, hábitos de ahorro y cómo se distribuye tu dinero entre metas.
+  </p>
+  <p class="text-muted small mb-0 mt-1">
+    Estos datos se calculan a partir de tus movimientos y el progreso de cada reto activo.
+  </p>
+</div>
+
+<!-- ========================= -->
+<!-- RESUMEN GENERAL -->
+<!-- ========================= -->
+<div class="qc-card mb-4">
+  <h2 class="h5 mb-3">Resumen general</h2>
+
+  <div class="row text-center">
+    <div class="col-md-3 col-6 mb-3">
+      <div class="qc-pill text-center py-3">
+        <div class="small text-muted mb-1">💰 Total ahorrado</div>
+        <div class="fw-bold fs-5">${{ "%.0f"|format(resumen.total_ahorrado or 0) }}</div>
+        <div class="text-muted small mt-1">Desde que empezaste a usar QuestCash.</div>
+      </div>
+    </div>
+
+    <div class="col-md-3 col-6 mb-3">
+      <div class="qc-pill text-center py-3">
+        <div class="small text-muted mb-1">🔁 Número de aportes</div>
+        <div class="fw-bold fs-5">{{ resumen.num_aportes or 0 }}</div>
+        <div class="text-muted small mt-1">Cantidad total de movimientos de ahorro.</div>
+      </div>
+    </div>
+
+    <div class="col-md-3 col-6 mb-3">
+      <div class="qc-pill text-center py-3">
+        <div class="small text-muted mb-1">🎯 Metas activas</div>
+        <div class="fw-bold fs-5">{{ resumen.metas_activas or 0 }}</div>
+        <div class="text-muted small mt-1">Retos que sigues trabajando actualmente.</div>
+      </div>
+    </div>
+
+    <div class="col-md-3 col-6 mb-3">
+      <div class="qc-pill text-center py-3">
+        <div class="small text-muted mb-1">🏆 Metas completadas</div>
+        <div class="fw-bold fs-5">{{ resumen.metas_completadas or 0 }}</div>
+        <div class="text-muted small mt-1">Retos que ya lograste al 100%.</div>
+      </div>
+    </div>
+  </div>
+
+  {% if resumen.meta_top_nombre %}
+    <p class="text-muted mb-2 mt-2">
+      Meta con más ahorro: 
+      <strong>{{ resumen.meta_top_nombre }}</strong> — 
+      <strong>${{ "%.0f"|format(resumen.meta_top_monto or 0) }}</strong>.
+    </p>
+  {% endif %}
+</div>
+
+<!-- ========================= -->
+<!-- GRÁFICA: últimos 30 días -->
+<!-- ========================= -->
+<div class="qc-card mb-4">
+  <h2 class="h5 mb-1 fw-bold">Ahorro en los últimos 30 días</h2>
+  <p class="text-muted small mb-3">
+    Suma de tus aportes diarios en los últimos 30 días. Ideal para ver rachas y semanas fuertes.
+  </p>
+
+  {% if serie_30.labels %}
+    <canvas id="chart30dias" height="120"></canvas>
+  {% else %}
+    <p class="text-muted mb-0">Todavía no hay aportes registrados.</p>
+  {% endif %}
+</div>
+
+<!-- ========================= -->
+<!-- GRÁFICA: distribución por meta -->
+<!-- ========================= -->
+<div class="qc-card mb-4">
+  <h2 class="h5 mb-1 fw-bold">Distribución de ahorro por meta</h2>
+  <p class="text-muted small mb-3">Compara cuánto has aportado a cada objetivo.</p>
+
+  {% if serie_metas.labels %}
+    <canvas id="chartMetas" height="120"></canvas>
+  {% else %}
+    <p class="text-muted mb-0">Aún no hay datos suficientes.</p>
+  {% endif %}
+</div>
+
+<a href="{{ url_for('dashboard') }}" class="btn btn-link">&larr; Volver al dashboard</a>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  const serie30Labels = {{ serie_30.labels|tojson }};
+  const serie30Data = {{ serie_30.data|tojson }};
+  const serieMetasLabels = {{ serie_metas.labels|tojson }};
+  const serieMetasData = {{ serie_metas.data|tojson }};
+
+  // Gráfica de línea — últimos 30 días
+  if (serie30Labels.length > 0) {
+    const ctx30 = document.getElementById('chart30dias').getContext('2d');
+    new Chart(ctx30, {
+      type: 'line',
+      data: {
+        labels: serie30Labels,
+        datasets: [{
+          label: 'Ahorro diario (MXN)',
+          data: serie30Data,
+          borderColor: '#2563eb',
+          backgroundColor: 'rgba(37, 99, 235, 0.25)',
+          fill: true,
+          tension: 0.35
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false }},
+        scales: { y: { beginAtZero: true }}
+      }
+    });
+  }
+
+  // Gráfica de barras — ahorro por meta
+  if (serieMetasLabels.length > 0) {
+    const ctxMetas = document.getElementById('chartMetas').getContext('2d');
+    new Chart(ctxMetas, {
+      type: 'bar',
+      data: {
+        labels: serieMetasLabels,
+        datasets: [{
+          data: serieMetasData,
+          backgroundColor: '#2563eb'
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false }},
+        scales: {
+          x: { beginAtZero: true },
+          y: { beginAtZero: true }
+        }
+      }
+    });
+  }
+</script>
+
+{% endblock %}

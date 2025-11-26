@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% set total_insignias = insignias|length if insignias else 0 %}
+<div class="mb-4">
+  <h1 class="h4 fw-bold mb-1">Sala de trofeos</h1>
+  <p class="text-muted mb-0">
+    Revisa las insignias que has desbloqueado y las que aún puedes conseguir.
+  </p>
+  <p class="text-muted small mb-0 mt-1">
+    Has desbloqueado
+    <span class="fw-semibold">{{ insignias_obtenidas_ids|length }}</span>
+    de
+    <span class="fw-semibold">{{ total_insignias }}</span>
+    insignias disponibles.
+  </p>
+</div>
+
+{% if insignias %}
+  <div class="trophy-grid">
+    {% for ins in insignias %}
+      {% set desbloqueada = ins.id in insignias_obtenidas_ids %}
+
+      <div
+        class="trophy-card qc-card
+               {% if desbloqueada %}trophy-unlocked{% else %}trophy-locked{% endif %}
+               trophy-{{ ins.rareza|lower }}"
+        role="button"
+        tabindex="0"
+        data-id="{{ ins.id }}"
+        data-title="{{ ins.nombre }}"
+        data-rarity="{{ ins.rareza|capitalize }}"
+        data-status="{% if desbloqueada %}Insignia desbloqueada{% else %}Insignia bloqueada{% endif %}"
+        data-how="{{ ins.descripcion or 'Sin información adicional' }}"
+        data-img="{{ url_for('static', filename='img/insignias/' ~ ins.icono) }}"
+      >
+
+        <div class="trophy-card-front">
+          <div class="trophy-medal-wrapper">
+            <div class="trophy-medal-bg"></div>
+
+            <img
+              src="{{ url_for('static', filename='img/insignias/' ~ ins.icono) }}"
+              alt="{{ ins.nombre }}"
+              class="trophy-medal-img {% if not desbloqueada %}trophy-medal-locked{% endif %}"
+            >
+
+            {% if not desbloqueada %}
+              <div class="trophy-lock-overlay">
+                <span class="trophy-lock-icon">🔒</span>
+              </div>
+            {% endif %}
+          </div>
+
+          <div class="trophy-info mt-2">
+            <h2 class="mb-1">{{ ins.nombre }}</h2>
+
+            <span class="badge trophy-rarity mb-2">
+              {{ ins.rareza|capitalize }}
+            </span>
+
+            <p class="mb-0 small text-muted">
+              {% if desbloqueada %}
+                Logro conseguido. Toca para ver más detalles.
+              {% else %}
+                Aún está bloqueada. Toca para ver cómo desbloquearla.
+              {% endif %}
+            </p>
+          </div>
+        </div>
+
+      </div>
+
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="qc-card p-4 text-center">
+    <p class="text-muted mb-1">Todavía no hay insignias configuradas.</p>
+    <p class="text-muted small mb-0">
+      Cuando desbloquees tus primeras metas, comenzarás a llenar tu sala de trofeos.
+    </p>
+  </div>
+{% endif %}
+
+<!-- Modal insignia -->
+<div id="trophyModalBackdrop" class="trophy-modal-backdrop" style="display:none;">
+  <div id="trophyModalCard" class="trophy-modal">
+
+    <div class="trophy-modal-header">
+      <h2 id="trophyModalTitle" class="trophy-modal-title mb-0"></h2>
+      <button id="trophyModalClose" class="trophy-modal-close">&times;</button>
+    </div>
+
+    <div class="text-center mb-3">
+      <div class="trophy-medal-wrapper">
+        <div class="trophy-medal-bg"></div>
+        <img id="trophyModalImg" src="" class="trophy-medal-img">
+      </div>
+    </div>
+
+    <div class="mb-2">
+      <span id="trophyModalRarity" class="badge trophy-rarity me-2"></span>
+      <span id="trophyModalStatus" class="trophy-modal-status"></span>
+    </div>
+
+    <h3 class="trophy-modal-subtitle mb-2">Cómo desbloquearla</h3>
+    <p id="trophyModalHow" class="trophy-modal-how mb-0"></p>
+
+  </div>
+</div>
+
+<a href="{{ url_for('dashboard') }}" class="btn btn-link mt-3">&larr; Volver al dashboard</a>
+{% endblock %}
+
+{# 👇 NUEVO: cargamos el JS específico de insignias #}
+{% block scripts_extra %}
+  <script src="{{ url_for('static', filename='js/insignias3d.js') }}"></script>
+{% endblock %}

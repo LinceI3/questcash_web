@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Centro de notificaciones{% endblock %}
+
+{% block content %}
+<div class="container page-fade my-4">
+    <div class="d-flex align-items-baseline justify-content-between mb-3">
+        <div>
+            <h1 class="page-title mb-1">Centro de notificaciones</h1>
+            <p class="text-muted mb-0">
+                Revisa alertas, recordatorios y avisos importantes sobre tus retos de ahorro y tus gastos.
+            </p>
+        </div>
+    </div>
+
+    {% if notificaciones and notificaciones|length %}
+        <div class="notifications-list">
+            {% for n in notificaciones %}
+                {# tipo puede ser "info", "warning", "danger" #}
+                <div class="qc-card notification-card mb-3 d-flex align-items-center">
+                    <div class="notification-icon-wrapper me-3">
+                        <div class="notification-icon notification-icon-{{ n.tipo|default('info') }}">
+                            {% if n.tipo == "danger" %}
+                                !
+                            {% elif n.tipo == "warning" %}
+                                !
+                            {% else %}
+                                i
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="flex-grow-1">
+                        <div class="notification-meta text-uppercase small fw-semibold text-muted mb-1">
+                            {% if n.tipo == "danger" %}
+                                Alerta
+                            {% elif n.tipo == "warning" %}
+                                Recordatorio
+                            {% else %}
+                                Aviso
+                            {% endif %}
+                        </div>
+                        <p class="mb-0 notification-message">
+                            {{ n.mensaje }}
+                        </p>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="qc-card text-center py-5">
+            <h5 class="mb-2">Sin notificaciones por ahora</h5>
+            <p class="text-muted mb-0">
+                Cuando Questy tenga algo importante que contarte sobre tus retos o tus gastos,
+                aparecerá aquí.
+            </p>
+        </div>
+    {% endif %}
+
+    <a href="{{ url_for('dashboard') }}" class="btn btn-link mt-4">
+        ← Volver al dashboard
+    </a>
+</div>
+{% endblock %}

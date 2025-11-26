@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex justify-content-center">
+  <div class="qc-card p-4" style="max-width: 480px; width:100%;">
+
+    <div class="text-center mb-4">
+      <img src="{{ url_for('static', filename='img/QuestCash Isotipo.png') }}"
+           alt="QC" style="height:70px;" class="mb-2">
+      <h1 class="h4 fw-bold mb-1">Crear cuenta</h1>
+      <p class="text-muted mb-0">Únete a QuestCash y empieza a cumplir tus metas.</p>
+    </div>
+
+    <form method="POST" class="needs-validation" novalidate>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <!-- Nombre -->
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Nombre</label>
+        <input type="text" class="form-control qc-input-pill"
+               id="nombre" name="nombre" required maxlength="100"
+               placeholder="Tu nombre completo">
+        <div class="invalid-feedback">
+          Ingresa tu nombre completo.
+        </div>
+      </div>
+
+      <!-- Correo -->
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Correo electrónico</label>
+        <input type="email" class="form-control qc-input-pill"
+               id="correo" name="correo" required maxlength="150"
+               pattern="^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$"
+               placeholder="tucorreo@ejemplo.com">
+        <div class="invalid-feedback">
+          Ingresa un correo electrónico válido.
+        </div>
+        <div class="form-text">Debe ser un correo válido (.com / .mx / .org).</div>
+      </div>
+
+      <!-- Contraseña -->
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Contraseña</label>
+        <input type="password" class="form-control qc-input-pill"
+               id="password" name="password" required minlength="8" maxlength="128"
+               pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}"
+               placeholder="Mínimo 8 caracteres, mayúsculas, minúsculas y número">
+        <div class="invalid-feedback">
+          Revisa el formato de tu contraseña.
+        </div>
+        <button type="button" id="togglePassword" class="btn btn-sm btn-outline-secondary mt-2 qc-btn-pill">
+          Mostrar contraseña
+        </button>
+
+        <!-- Barra de fortaleza -->
+        <div class="mt-2">
+          <div id="passwordStrengthBar" class="progress" style="height: 6px;">
+            <div id="passwordStrengthFill" class="progress-bar" role="progressbar" style="width: 0%;"></div>
+          </div>
+          <small id="passwordStrengthText" class="text-muted"></small>
+        </div>
+
+        <div class="form-text">
+          Debe contener mayúscula, minúscula, número y mínimo 8 caracteres.
+        </div>
+        <ul id="passwordRequirements" class="small text-muted mb-0 ps-3">
+          <li data-req="length">Al menos 8 caracteres.</li>
+          <li data-req="upper">Al menos una mayúscula (A-Z).</li>
+          <li data-req="lower">Al menos una minúscula (a-z).</li>
+          <li data-req="digit">Al menos un número (0-9).</li>
+          <li data-req="symbol">Idealmente un símbolo (@, #, !, etc.).</li>
+        </ul>
+      </div>
+
+      <!-- Confirmar contraseña -->
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Confirmar contraseña</label>
+        <input type="password" class="form-control qc-input-pill"
+               id="password2" name="password2" required minlength="8" maxlength="128"
+               placeholder="Repite tu contraseña">
+        <div class="invalid-feedback">
+          Las contraseñas deben coincidir.
+        </div>
+      </div>
+
+      <!-- Botón principal -->
+      <button type="submit" class="btn btn-primary w-100 py-2 qc-btn-pill fw-semibold">
+        Crear cuenta
+      </button>
+    </form>
+
+    <p class="mt-3 text-center text-muted">
+      ¿Ya tienes cuenta?
+      <a href="{{ url_for('login') }}" class="fw-semibold">Inicia sesión aquí</a>.
+    </p>
+
+  </div>
+</div>
+
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    const passwordInput = document.getElementById("password");
+    const toggleBtn = document.getElementById("togglePassword");
+    const strengthBar = document.getElementById("passwordStrengthFill");
+    const strengthText = document.getElementById("passwordStrengthText");
+    const password2Input = document.getElementById("password2");
+
+    const passwordReqList = document.getElementById("passwordRequirements");
+
+    function marcarRequisito(id, ok) {
+      if (!passwordReqList) return;
+      const li = passwordReqList.querySelector(`[data-req="${id}"]`);
+      if (!li) return;
+      li.classList.toggle("text-success", ok);
+      li.classList.toggle("text-muted", !ok);
+    }
+
+    if (toggleBtn && passwordInput) {
+      toggleBtn.addEventListener("click", () => {
+        const tipo = passwordInput.type === "password" ? "text" : "password";
+        passwordInput.type = tipo;
+        toggleBtn.textContent = tipo === "password" ? "Mostrar contraseña" : "Ocultar contraseña";
+      });
+    }
+
+    if (passwordInput && strengthBar && strengthText) {
+      passwordInput.addEventListener("input", () => {
+        const pwd = passwordInput.value;
+        const hasLength = pwd.length >= 8;
+        const hasUpper  = /[A-Z]/.test(pwd);
+        const hasLower  = /[a-z]/.test(pwd);
+        const hasDigit  = /[0-9]/.test(pwd);
+        const hasSymbol = /[^A-Za-z0-9]/.test(pwd);
+
+        let score = 0;
+        if (hasLength) score++;
+        if (hasUpper) score++;
+        if (hasLower) score++;
+        if (hasDigit) score++;
+        if (hasSymbol) score++;
+
+        const percent = (score / 5) * 100;
+        strengthBar.style.width = percent + "%";
+
+        marcarRequisito("length", hasLength);
+        marcarRequisito("upper", hasUpper);
+        marcarRequisito("lower", hasLower);
+        marcarRequisito("digit", hasDigit);
+        marcarRequisito("symbol", hasSymbol);
+
+        if (score <= 1) {
+          strengthBar.className = "progress-bar bg-danger";
+          strengthText.textContent = "Muy débil";
+        } else if (score === 2) {
+          strengthBar.className = "progress-bar bg-warning";
+          strengthText.textContent = "Débil";
+        } else if (score === 3) {
+          strengthBar.className = "progress-bar bg-info";
+          strengthText.textContent = "Normal";
+        } else if (score === 4) {
+          strengthBar.className = "progress-bar bg-primary";
+          strengthText.textContent = "Fuerte";
+        } else {
+          strengthBar.className = "progress-bar bg-success";
+          strengthText.textContent = "Muy fuerte";
+        }
+
+        const faltantes = [];
+        if (!hasLength) faltantes.push("al menos 8 caracteres");
+        if (!hasUpper) faltantes.push("una letra mayúscula");
+        if (!hasLower) faltantes.push("una letra minúscula");
+        if (!hasDigit) faltantes.push("un número");
+        if (!hasSymbol) faltantes.push("un símbolo");
+
+        if (faltantes.length > 0) {
+          passwordInput.setCustomValidity("Tu contraseña aún necesita: " + faltantes.join(", ") + ".");
+        } else {
+          passwordInput.setCustomValidity("");
+        }
+      });
+    }
+
+    // Validación de coincidencia de contraseña y confirmación
+    if (passwordInput && password2Input) {
+      function validarCoincidencia() {
+        if (password2Input.value && password2Input.value !== passwordInput.value) {
+          password2Input.setCustomValidity("Las contraseñas no coinciden.");
+        } else {
+          password2Input.setCustomValidity("");
+        }
+      }
+
+      passwordInput.addEventListener("input", validarCoincidencia);
+      password2Input.addEventListener("input", validarCoincidencia);
+    }
+  });
+</script>
+
+{% endblock %}

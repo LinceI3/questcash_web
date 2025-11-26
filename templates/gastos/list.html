@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="mb-4 d-flex flex-wrap justify-content-between align-items-center gap-2">
+  <div>
+    <h1 class="h4 fw-bold mb-1">Control de gastos</h1>
+    <p class="text-muted mb-0">
+      Mira tus gastos como si fueran “estadísticas de entrenamiento”: identifica en qué se te va
+      el dinero y convierte cada pequeño ajuste en progreso hacia tus metas.
+    </p>
+  </div>
+  <div class="text-md-end">
+    <a href="{{ url_for('nuevo_gasto') }}" class="btn btn-primary">
+      Registrar gasto
+    </a>
+  </div>
+</div>
+
+{# Fila de tarjetas de progreso al estilo "anillos" / fitness #}
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="qc-card d-flex align-items-center justify-content-between gap-3">
+      <div>
+        <p class="text-muted small mb-1">Total gastado este mes</p>
+        <h2 class="h4 mb-0">
+          ${{ "%.2f"|format(total_mes) }} MXN
+        </h2>
+        <p class="text-muted extra-small mb-1">
+          Mide tu “carga” de gasto mensual.
+        </p>
+        <p
+          class="badge rounded-pill mt-1 extra-small
+          {% if total_mes < 1000 %}
+            bg-success-subtle text-success-emphasis border border-success-subtle
+          {% elif total_mes < 3000 %}
+            bg-warning-subtle text-warning-emphasis border border-warning-subtle
+          {% else %}
+            bg-danger-subtle text-danger-emphasis border border-danger-subtle
+          {% endif %}"
+        >
+          {% if total_mes < 1000 %}
+            Categoría de gasto: <strong>Saludable</strong>
+          {% elif total_mes < 3000 %}
+            Categoría de gasto: <strong>En observación</strong>
+          {% else %}
+            Categoría de gasto: <strong>Malgastado</strong>
+          {% endif %}
+        </p>
+      </div>
+      <div class="dashboard-ring ring-blue"></div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="qc-card d-flex align-items-center justify-content-between gap-3">
+      <div>
+        <p class="text-muted small mb-1">Gastos registrados</p>
+        <h2 class="h4 mb-0">
+          {{ gastos|length }}
+        </h2>
+        <p class="text-muted extra-small mb-0">
+          Cada gasto registrado = más datos para Questy.
+        </p>
+      </div>
+      <div class="dashboard-ring ring-green"></div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="qc-card d-flex align-items-center justify-content-between gap-3">
+      <div>
+        <p class="text-muted small mb-1">Racha consciente</p>
+        <h2 class="h4 mb-0">
+          {{ racha_dias or 0 }} días
+        </h2>
+        <p class="text-muted extra-small mb-0">
+          Días seguidos registrando tus gastos.
+        </p>
+      </div>
+      <div class="dashboard-ring ring-orange"></div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-12">
+    <div class="qc-card mb-3">
+      <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
+        <div>
+          <h2 class="h6 mb-1">Gastos del mes actual</h2>
+          <p class="text-muted small mb-0">
+            Revisa tu historial reciente. Muy pronto Questy utilizará esta información para detectar
+            patrones y darte recomendaciones inteligentes en el módulo de IA.
+          </p>
+        </div>
+      </div>
+
+      {% if gastos %}
+        <div class="table-responsive mt-3">
+          <table class="table align-middle mb-0">
+            <thead>
+              <tr>
+                <th scope="col" class="text-muted extra-small">Fecha</th>
+                <th scope="col" class="text-muted extra-small">Descripción</th>
+                <th scope="col" class="text-muted extra-small">Categoría</th>
+                <th scope="col" class="text-muted extra-small">Método</th>
+                <th scope="col" class="text-muted extra-small text-end">Monto</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for gasto in gastos %}
+                <tr>
+                  <td class="small text-muted">
+                    {{ gasto.fecha.strftime("%d %b %Y") }}
+                  </td>
+                  <td>
+                    <div class="d-flex flex-column">
+                      <span class="fw-semibold">
+                        {{ gasto.descripcion or "Gasto sin descripción" }}
+                      </span>
+                      {% if gasto.es_hormiga %}
+                        <span class="badge rounded-pill bg-warning-subtle text-warning-emphasis mt-1 extra-small">
+                          Gasto hormiga
+                        </span>
+                      {% endif %}
+                    </div>
+                  </td>
+                  <td>
+                    {% if gasto.categoria %}
+                      <span class="badge rounded-pill bg-light text-muted border">
+                        {{ gasto.categoria.nombre }}
+                      </span>
+                    {% else %}
+                      <span class="text-muted small">Sin categoría</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if gasto.metodo_pago %}
+                      <span class="badge rounded-pill bg-light text-muted border">
+                        {{ gasto.metodo_pago }}
+                      </span>
+                    {% else %}
+                      <span class="text-muted small">—</span>
+                    {% endif %}
+                  </td>
+                  <td class="text-end">
+                    <span class="fw-semibold">
+                      ${{ "%.2f"|format(gasto.monto) }}
+                    </span>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="text-center py-4">
+          <p class="text-muted mb-1">
+            Aún no has registrado gastos este mes.
+          </p>
+          <p class="text-muted small mb-3">
+            Comienza anotando tus consumos diarios (comida, transporte, antojos, suscripciones…)
+            para que Questy pueda detectar patrones y gastos hormiga.
+          </p>
+          <a href="{{ url_for('nuevo_gasto') }}" class="btn btn-outline-primary btn-sm">
+            Registrar mi primer gasto
+          </a>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<a href="{{ url_for('dashboard') }}" class="btn btn-link mt-3">
+  &larr; Volver al dashboard
+</a>
+{% endblock %}

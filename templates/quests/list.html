@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-4 d-flex justify-content-between align-items-center">
+  <div>
+    <h1 class="h4 fw-bold mb-1">Retos de ahorro QuestCash</h1>
+    <p class="text-muted mb-0">
+      Administra tus quests: revisa su avance, crea nuevos retos y lleva el control de tus metas.
+    </p>
+  </div>
+  <div>
+    <a href="{{ url_for('crear_quest') }}" class="btn btn-primary">
+      + Nuevo reto
+    </a>
+  </div>
+</div>
+
+{% if quests %}
+  <div class="row g-3">
+    {% for q in quests %}
+      <div class="col-12 col-md-6 col-lg-4">
+        <div class="quest-card p-3 h-100 d-flex flex-column justify-content-between">
+
+          <!-- Encabezado: nombre + porcentaje -->
+          <div class="d-flex justify-content-between align-items-start mb-1">
+            <div>
+              <h2 class="h6 mb-1">{{ q.nombre }}</h2>
+              <small class="text-muted">
+                Objetivo: {{ "${:,.2f}".format(q.monto_objetivo or 0) }} MXN
+              </small>
+            </div>
+            <span class="badge bg-primary">
+              {{ q.progreso_porcentaje() }}%
+            </span>
+          </div>
+
+          <!-- Progreso circular compacto -->
+          <div class="mb-2">
+            {% set porcentaje = q.progreso_porcentaje() or 0 %}
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <small class="text-muted">Progreso</small>
+              <small class="fw-semibold">{{ porcentaje }}%</small>
+            </div>
+            <div class="quest-progress-bar" style="--progress: {{ (porcentaje or 0) / 100 }};"></div>
+          </div>
+
+          <!-- Info secundaria -->
+          <div class="small text-muted mb-2">
+            <div>
+              <span class="fw-semibold">Fecha límite:</span>
+              {% if q.fecha_limite %}
+                {{ q.fecha_limite.strftime("%d/%m/%Y") }}
+              {% else %}
+                Sin fecha definida
+              {% endif %}
+            </div>
+            <div>
+              <span class="fw-semibold">Puntos:</span>
+              {{ q.puntos_recompensa or 0 }}
+            </div>
+          </div>
+
+          <!-- Estado + tipo -->
+          <div class="d-flex justify-content-between align-items-center mt-auto pt-1">
+            <div class="small">
+              {% if q.estatus == "pendiente" %}
+                <span class="badge bg-warning text-dark">Pendiente</span>
+              {% elif q.estatus == "en_progreso" %}
+                <span class="badge bg-primary">En progreso</span>
+              {% elif q.estatus == "completado" %}
+                <span class="badge bg-success">Completado</span>
+              {% elif q.estatus == "cancelado" %}
+                <span class="badge bg-danger">Cancelado</span>
+              {% else %}
+                <span class="badge bg-secondary">{{ q.estatus|capitalize }}</span>
+              {% endif %}
+            </div>
+
+            <a href="{{ url_for('detalle_quest', quest_id=q.id) }}"
+               class="btn btn-outline-primary btn-sm">
+              Ver detalle
+            </a>
+          </div>
+
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="qc-card p-4 text-center">
+    <h2 class="h5 mb-2">Aún no tienes retos de ahorro</h2>
+    <p class="text-muted mb-3">
+      Crea tu primer Quest y empieza a registrar tus avances de ahorro.
+    </p>
+    <a href="{{ url_for('crear_quest') }}" class="btn btn-primary">
+      + Crear mi primer reto
+    </a>
+  </div>
+{% endif %}
+{% endblock %}

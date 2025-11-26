@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('listar_quests') }}" class="btn btn-link ps-0">&larr; Volver a retos</a>
+</div>
+
+{# Mapeos legibles para estatus / dificultad / tipo #}
+{% set estatus_map = {
+  "pendiente": "Pendiente",
+  "en_progreso": "En progreso",
+  "completado": "Completado",
+  "cancelado": "Cancelado"
+} %}
+{% set dificultad_map = {
+  "facil": "Fácil",
+  "fácil": "Fácil",
+  "media": "Media",
+  "dificil": "Difícil",
+  "difícil": "Difícil",
+  "desconocida": "Desconocida"
+} %}
+{% set tipo_texto = "Reto individual" if quest.tipo == "individual" else "Reto colaborativo" %}
+
+{% set estatus_humano = estatus_map.get(quest.estatus, quest.estatus|capitalize) %}
+{% set dificultad_humana = dificultad_map.get(quest.dificultad|lower, quest.dificultad|capitalize if quest.dificultad else "Calculada automáticamente") %}
+
+<div class="qc-card p-4 mb-4 quest-detail-header">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+    <div class="d-flex align-items-center gap-3">
+      <div class="quest-progress-ring" style="--progress: {{ quest.progreso_porcentaje() }}">
+        <span class="quest-progress-value">
+          {{ quest.progreso_porcentaje() }}%
+        </span>
+      </div>
+      <div>
+        <p class="text-muted mb-1">Progreso del reto</p>
+        <h1 class="h3 fw-bold mb-1">{{ quest.nombre }}</h1>
+        <p class="text-muted mb-1">
+          {{ quest.descripcion or "Sin descripción para este reto." }}
+        </p>
+        <p class="text-muted small mb-1">
+          Llevas
+          <span class="fw-semibold">
+            ${{ "{:,.2f}".format(quest.monto_actual or 0) }} MXN
+          </span>
+          de
+          <span class="fw-semibold">
+            ${{ "{:,.2f}".format(quest.monto_objetivo or 0) }} MXN
+          </span>
+          ahorrados.
+        </p>
+        <p class="text-muted small mb-0">
+          Puntos QuestCash por completar este reto:
+          <span class="fw-semibold">{{ quest.puntos_recompensa or 0 }}</span> pts
+        </p>
+      </div>
+    </div>
+
+    <div class="text-end">
+      <div class="mb-2">
+        <span class="badge rounded-pill bg-primary me-1">
+          {{ estatus_humano }}
+        </span>
+        <span class="badge rounded-pill bg-light text-muted me-1">
+          {{ tipo_texto }}
+        </span>
+        <span class="badge rounded-pill bg-light text-muted">
+          Dificultad estimada: {{ dificultad_humana }}
+        </span>
+      </div>
+      <div class="small text-muted">
+        Creado {{ quest.fecha_creacion.strftime('%d/%m/%Y') if quest.fecha_creacion }}
+        &middot;
+        Límite {{ quest.fecha_limite.strftime('%d/%m/%Y') if quest.fecha_limite }}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Columna principal -->
+  <div class="col-lg-8">
+    <div class="qc-card p-4 mb-4">
+      <div class="row text-center mb-3">
+        <div class="col-4">
+          <p class="text-muted mb-1">💰 Ahorrado</p>
+          <p class="h5 mb-0">${{ "{:,.2f}".format(quest.monto_actual or 0) }} MXN</p>
+          <p class="text-muted small mb-0">Lo que ya llevas acumulado.</p>
+        </div>
+        <div class="col-4">
+          <p class="text-muted mb-1">🎯 Meta</p>
+          <p class="h5 mb-0">${{ "{:,.2f}".format(quest.monto_objetivo or 0) }} MXN</p>
+          <p class="text-muted small mb-0">Objetivo total de este reto.</p>
+        </div>
+        <div class="col-4">
+          {% set restante = (quest.monto_objetivo or 0) - (quest.monto_actual or 0) %}
+          {% if restante < 0 %}{% set restante = 0 %}{% endif %}
+          <p class="text-muted mb-1">📉 Restante</p>
+          <p class="h5 mb-0">${{ "{:,.2f}".format(restante) }} MXN</p>
+          <p class="text-muted small mb-0">Lo que falta por ahorrar.</p>
+        </div>
+      </div>
+
+      <hr>
+
+      <div class="row gy-3">
+        <div class="col-md-6">
+          <p class="text-muted mb-1">Estado</p>
+          <p class="mb-0">{{ estatus_humano }}</p>
+        </div>
+        <div class="col-md-6">
+          <p class="text-muted mb-1">Tipo de reto</p>
+          <p class="mb-0">{{ tipo_texto }}</p>
+        </div>
+        <div class="col-md-6">
+          <p class="text-muted mb-1">Dificultad estimada</p>
+          <p class="mb-0">{{ dificultad_humana }}</p>
+        </div>
+        <div class="col-md-6">
+          <p class="text-muted mb-1">Fecha límite</p>
+          <p class="mb-0">
+            {{ quest.fecha_limite.strftime('%d/%m/%Y') if quest.fecha_limite else "Sin fecha" }}
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qc-card p-4">
+      <h2 class="h6 fw-semibold mb-3">Acciones</h2>
+      <div class="d-flex flex-wrap gap-2">
+        {# Solo permitir nuevos movimientos si el reto no está cancelado #}
+        {% if quest.estatus != "cancelado" %}
+          <a href="{{ url_for('crear_movimiento', quest_id=quest.id) }}" class="btn btn-primary">
+            + Registrar aporte
+          </a>
+        {% endif %}
+
+        <a href="{{ url_for('listar_movimientos', quest_id=quest.id) }}" class="btn btn-outline-primary">
+          Ver movimientos
+        </a>
+
+        {% if es_creador %}
+          {# No permitir editar si el reto está cancelado #}
+          {% if quest.estatus != "cancelado" %}
+            <a href="{{ url_for('editar_quest', quest_id=quest.id) }}" class="btn btn-outline-secondary">
+              Editar reto
+            </a>
+          {% else %}
+            <button class="btn btn-outline-secondary" disabled>
+              Editar reto
+            </button>
+          {% endif %}
+
+          {% if quest.estatus not in ["cancelado", "completado"] %}
+            <a href="{{ url_for('cancelar_quest', quest_id=quest.id) }}" class="btn btn-outline-danger">
+              Cancelar reto
+            </a>
+          {% else %}
+            <button class="btn btn-outline-danger" disabled>
+              Cancelar reto
+            </button>
+          {% endif %}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Columna lateral: colaboradores -->
+  <div class="col-lg-4">
+    <div class="qc-card p-4">
+      <h2 class="h6 fw-semibold mb-3">Colaboradores</h2>
+
+      {% set num_colabs = participaciones|length - 1 %}
+      {% if quest.tipo != "colaborativo" %}
+        <p class="text-muted mb-0">Este es un reto individual.</p>
+      {% elif num_colabs <= 0 %}
+        <p class="text-muted mb-0">Sin colaboradores adicionales por el momento.</p>
+      {% else %}
+        <ul class="list-unstyled mb-0">
+          {% for p in participaciones %}
+            {% if p.usuario_id != quest.usuario_id %}
+              <li class="mb-1">
+                {{ p.usuario.nombre }}
+                <span class="text-muted small">({{ p.rol|capitalize }})</span>
+              </li>
+            {% endif %}
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      {% if es_creador and quest.tipo == "colaborativo" %}
+        {% if quest.estatus != "cancelado" %}
+          <a href="{{ url_for('gestionar_colaboradores', quest_id=quest.id) }}"
+             class="btn btn-outline-primary btn-sm mt-3 w-100">
+            Gestionar colaboradores
+          </a>
+        {% else %}
+          <button class="btn btn-outline-primary btn-sm mt-3 w-100" disabled>
+            Gestionar colaboradores
+          </button>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h4 fw-bold mb-0">Movimientos — {{ quest.nombre }}</h1>
+
+  {% if quest.estatus != "cancelado" %}
+    <a href="{{ url_for('nuevo_movimiento', quest_id=quest.id) }}" class="btn btn-primary">
+      + Registrar movimiento
+    </a>
+  {% else %}
+    <button class="btn btn-outline-secondary" disabled>
+      Reto cancelado
+    </button>
+  {% endif %}
+</div>
+
+{% if movimientos %}
+<div class="qc-card p-0">
+
+  <ul class="list-unstyled mb-0">
+
+    {% for m in movimientos %}
+    <li class="p-3 movement-item border-bottom" style="border-color: rgba(15,23,42,0.12);">
+
+      <div class="d-flex justify-content-between align-items-center gap-3">
+
+        <!-- Icono + texto -->
+        <div class="d-flex align-items-center gap-3">
+
+          {# Icono redondo con color según el tipo de movimiento #}
+          <div
+            class="rounded-circle d-flex align-items-center justify-content-center"
+            style="
+              width: 42px;
+              height: 42px;
+              {% if m.tipo == 'aporte' %}
+                background: rgba(34, 197, 94, 0.08);
+                color: #16a34a;
+              {% else %}
+                background: rgba(239, 68, 68, 0.08);
+                color: #dc2626;
+              {% endif %}
+            "
+          >
+            {% if m.tipo == 'aporte' %}
+              <span class="fw-bold">+</span>
+            {% else %}
+              <span class="fw-bold">−</span>
+            {% endif %}
+          </div>
+
+          <div>
+            <div class="small text-muted mb-2">
+              {{ m.fecha.strftime("%d/%m/%Y %H:%M") }}
+            </div>
+
+            <div class="fw-semibold">
+              {% if m.tipo == "aporte" %}
+                Aporte registrado
+              {% else %}
+                Retiro registrado
+              {% endif %}
+              {% if m.nota %}
+                <span class="text-muted small">— {{ m.nota }}</span>
+              {% endif %}
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Monto alineado a la derecha -->
+        <div class="text-end">
+          <div class="fw-bold {% if m.tipo == 'aporte' %}text-success{% else %}text-danger{% endif %} fs-5">
+            {% if m.tipo == "aporte" %}
+              +${{ "%.2f"|format(m.monto) }}
+            {% else %}
+              -${{ "%.2f"|format(m.monto) }}
+            {% endif %}
+          </div>
+        </div>
+
+      </div>
+
+    </li>
+    {% endfor %}
+
+  </ul>
+
+</div>
+
+{% else %}
+  <div class="qc-card p-4 text-center">
+    <h2 class="h6 fw-bold mb-2">Aún no tienes movimientos registrados</h2>
+    <p class="text-muted mb-3">
+      Cuando registres tus aportes o retiros, verás aquí el historial de este reto.
+    </p>
+    {% if quest.estatus != "cancelado" %}
+      <a href="{{ url_for('nuevo_movimiento', quest_id=quest.id) }}" class="btn btn-primary btn-sm">
+        + Registrar primer movimiento
+      </a>
+    {% endif %}
+  </div>
+{% endif %}
+
+<a href="{{ url_for('detalle_quest', quest_id=quest.id) }}" class="btn btn-link mt-3">
+  ← Volver al reto
+</a>
+
+{% endblock %}

@@ -1,0 +1,15 @@
+# Entorno virtual
+venv/
+
+# Cachés de Python
+__pycache__/
+*.pyc
+
+# Base de datos local
+questcash.db
+
+# Config/env local
+.env
+
+# Cosas de macOS
+.DS_Store
