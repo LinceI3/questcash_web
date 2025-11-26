@@ -1275,34 +1275,3 @@ img {
     font-size: 0.98rem;
     line-height: 1.5;
 }
-
-/* =========================================================
-   LOGO / ISOTIPO — Navbar & Login
-   ========================================================= */
-
-/* Navbar: isotipo más grande y consistente */
-.navbar-brand img {
-  height: 40px;        /* antes probablemente ~24px */
-  width: auto;
-  max-height: 40px;
-}
-
-/* Si usas una clase específica para el logo en navbar,
-   puedes aplicarla también (por si ya existe en el HTML) */
-.qc-logo-nav {
-  height: 40px;
-  width: auto;
-  max-height: 40px;
-}
-
-/* Login: isotipo un poco más grande para que se luzca más */
-.auth-logo img,
-.login-card img,
-.qc-logo-login {
-  max-height: 72px;
-  width: auto;
-  display: block;
-  margin-left: auto;
-  margin-right: auto;
-  margin-bottom: 0.75rem;
-}
