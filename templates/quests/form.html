@@ -1,174 +1,209 @@
 {% extends "base.html" %}
 {% block content %}
 
-<div class="mb-3 d-flex justify-content-between align-items-center">
-  <div>
-    <h1 class="h4 mb-1">
-      {% if quest and quest.id %}
-        Editar reto de ahorro
-      {% else %}
-        Crear nuevo reto de ahorro
-      {% endif %}
-    </h1>
-    <p class="text-muted mb-0">
-      Define una meta clara, una fecha límite y decide si será un reto individual o colaborativo.
-    </p>
-  </div>
-</div>
+<div class="quest-form-page page-fade">
+  <section class="qc-card quest-form-hero mb-4">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3">
+      <div>
+        <span class="quest-form-eyebrow">Reto de ahorro</span>
+        <h1 class="h4 mb-1 fw-bold">
+          {% if quest and quest.id %}
+            Editar reto de ahorro
+          {% else %}
+            Crear nuevo reto de ahorro
+          {% endif %}
+        </h1>
+        <p class="text-muted mb-0">
+          Define una meta clara, una fecha límite y elige si será un reto individual o colaborativo.
+        </p>
+      </div>
 
-<div class="qc-card p-4">
-  <form method="POST" class="needs-validation" novalidate>
+      <div class="d-flex flex-wrap gap-2 quest-form-hero-actions">
+        <a href="{{ url_for('listar_quests') }}" class="btn btn-outline-secondary btn-sm">
+          Volver a metas
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <form method="POST" class="needs-validation quest-form-shell" novalidate>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-    <!-- Nombre y descripción -->
-    <div class="mb-3">
-      <label for="nombre" class="form-label fw-semibold">Nombre del reto</label>
-      <input
-        type="text"
-        class="form-control"
-        id="nombre"
-        name="nombre"
-        required
-        maxlength="100"
-        placeholder="Ej. Viaje a la playa, nueva laptop, fondo de emergencia…"
-        value="{{ quest.nombre if quest else '' }}"
-      >
-      <div class="invalid-feedback">
-        Ingresa un nombre para tu reto.
-      </div>
-    </div>
+    <div class="row g-4 align-items-start">
+      <div class="col-lg-8">
+        <section class="qc-card quest-form-card quest-form-main-card p-4">
+          <div class="quest-form-section-head mb-3">
+            <h2 class="h5 fw-bold mb-1">Información principal</h2>
+            <p class="text-muted small mb-0">
+              Ponle identidad a tu reto para que se sienta claro desde el primer momento.
+            </p>
+          </div>
 
-    <div class="mb-3">
-      <label for="descripcion" class="form-label fw-semibold">Descripción (opcional)</label>
-      <textarea
-        class="form-control"
-        id="descripcion"
-        name="descripcion"
-        rows="3"
-        maxlength="500"
-        placeholder="Describe por qué estás ahorrando y qué significa esta meta para ti."
-      >{% if quest %}{{ quest.descripcion }}{% endif %}</textarea>
-      <p class="text-muted small mb-0 mt-1">
-        Este texto solo lo verás tú. Úsalo para motivarte cuando revises tu progreso.
-      </p>
-    </div>
-
-    <!-- Monto y fecha en layout de 2 columnas -->
-    <div class="row">
-      <div class="col-md-6 mb-3">
-        <label for="monto_objetivo" class="form-label fw-semibold">Monto objetivo</label>
-        <div class="input-group">
-          <span class="input-group-text">MXN</span>
-          <input
-            type="number"
-            class="form-control"
-            id="monto_objetivo"
-            name="monto_objetivo"
-            required
-            min="1"
-            step="0.01"
-            placeholder="Ej. 5000.00"
-            value="{{ quest.monto_objetivo if quest else '' }}"
-          >
-        </div>
-        <div class="invalid-feedback">
-          Ingresa un monto objetivo mayor a 0.
-        </div>
-        <p class="text-muted small mb-0 mt-1">
-          El monto total que quieres alcanzar con este reto.
-        </p>
-      </div>
-
-      <div class="col-md-6 mb-3">
-        <label for="fecha_limite" class="form-label fw-semibold">Fecha límite</label>
-        <input
-          type="date"
-          class="form-control"
-          id="fecha_limite"
-          name="fecha_limite"
-          required
-          min="{{ hoy_iso }}"
-          value="{% if quest and quest.fecha_limite %}{{ quest.fecha_limite.strftime('%Y-%m-%d') }}{% endif %}"
-        >
-        <div class="invalid-feedback">
-          Elige una fecha válida igual o posterior a hoy.
-        </div>
-        <p class="text-muted small mb-0 mt-1">
-          QuestCash usará esta fecha para estimar tu ritmo de ahorro y darte recomendaciones.
-        </p>
-      </div>
-    </div>
-
-    <!-- Tipo de reto: individual o colaborativo -->
-    <div class="mb-3">
-      <label class="form-label fw-semibold d-block mb-2">Tipo de reto</label>
-      <div class="d-flex flex-column flex-md-row gap-2">
-        <div class="flex-fill">
-          <input
-            type="radio"
-            class="btn-check"
-            name="tipo_reto_visual"
-            id="tipo_individual"
-            autocomplete="off"
-            {% if not quest or not quest.es_colaborativo %}checked{% endif %}
-          >
-          <label class="btn btn-outline-primary w-100" for="tipo_individual">
-            🎮 Individual
-            <div class="d-block small text-muted">
-              Solo tú aportas a esta meta.
+          <div class="mb-3">
+            <label for="nombre" class="form-label fw-semibold">Nombre del reto</label>
+            <input
+              type="text"
+              class="form-control form-control-lg"
+              id="nombre"
+              name="nombre"
+              required
+              maxlength="100"
+              placeholder="Ej. Viaje a la playa, nueva laptop, fondo de emergencia…"
+              value="{{ quest.nombre if quest else '' }}"
+            >
+            <div class="invalid-feedback">
+              Ingresa un nombre para tu reto.
             </div>
-          </label>
-        </div>
+          </div>
 
-        <div class="flex-fill">
+          <div class="mb-0">
+            <label for="descripcion" class="form-label fw-semibold">Descripción</label>
+            <textarea
+              class="form-control"
+              id="descripcion"
+              name="descripcion"
+              rows="4"
+              maxlength="500"
+              placeholder="Describe por qué estás ahorrando y qué significa esta meta para ti."
+            >{% if quest %}{{ quest.descripcion }}{% endif %}</textarea>
+            <p class="text-muted small mb-0 mt-2">
+              Este texto solo lo verás tú. Úsalo para motivarte cuando revises tu progreso.
+            </p>
+          </div>
+        </section>
+
+        <section class="qc-card quest-form-card p-4 mt-4">
+          <div class="quest-form-section-head mb-3">
+            <h2 class="h5 fw-bold mb-1">Objetivo y tiempo</h2>
+            <p class="text-muted small mb-0">
+              Define cuánto quieres lograr y para cuándo quieres alcanzarlo.
+            </p>
+          </div>
+
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label for="monto_objetivo" class="form-label fw-semibold">Monto objetivo</label>
+              <div class="input-group input-group-lg">
+                <span class="input-group-text">MXN</span>
+                <input
+                  type="number"
+                  class="form-control"
+                  id="monto_objetivo"
+                  name="monto_objetivo"
+                  required
+                  min="1"
+                  step="0.01"
+                  placeholder="Ej. 5000.00"
+                  value="{{ quest.monto_objetivo if quest else '' }}"
+                >
+              </div>
+              <div class="invalid-feedback d-block invisible quest-form-feedback-spacer">
+                Ingresa un monto objetivo mayor a 0.
+              </div>
+              <p class="text-muted small mb-0 mt-1">
+                El monto total que quieres alcanzar con este reto.
+              </p>
+            </div>
+
+            <div class="col-md-6">
+              <label for="fecha_limite" class="form-label fw-semibold">Fecha límite</label>
+              <input
+                type="date"
+                class="form-control form-control-lg"
+                id="fecha_limite"
+                name="fecha_limite"
+                required
+                min="{{ hoy_iso }}"
+                value="{% if quest and quest.fecha_limite %}{{ quest.fecha_limite.strftime('%Y-%m-%d') }}{% endif %}"
+              >
+              <div class="invalid-feedback d-block invisible quest-form-feedback-spacer">
+                Elige una fecha válida igual o posterior a hoy.
+              </div>
+              <p class="text-muted small mb-0 mt-1">
+                QuestCash usará esta fecha para estimar tu ritmo de ahorro y darte recomendaciones.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="col-lg-4">
+        <section class="qc-card quest-form-card quest-form-side-card p-4">
+          <div class="quest-form-section-head mb-3">
+            <h2 class="h5 fw-bold mb-1">Tipo de reto</h2>
+            <p class="text-muted small mb-0">
+              Elige cómo quieres vivir esta meta dentro de QuestCash.
+            </p>
+          </div>
+
+          <div class="d-grid gap-3">
+            <div>
+              <input
+                type="radio"
+                class="btn-check"
+                name="tipo_reto_visual"
+                id="tipo_individual"
+                autocomplete="off"
+                {% if not quest or not quest.es_colaborativo %}checked{% endif %}
+              >
+              <label class="btn btn-outline-primary w-100 text-start quest-type-option" for="tipo_individual">
+                <span class="d-block fw-semibold mb-1">🎮 Individual</span>
+                <span class="d-block small text-muted">Solo tú aportas a esta meta.</span>
+              </label>
+            </div>
+
+            <div>
+              <input
+                type="radio"
+                class="btn-check"
+                name="tipo_reto_visual"
+                id="tipo_colaborativo"
+                autocomplete="off"
+                {% if quest and quest.es_colaborativo %}checked{% endif %}
+              >
+              <label class="btn btn-outline-success w-100 text-start quest-type-option" for="tipo_colaborativo">
+                <span class="d-block fw-semibold mb-1">🤝 Colaborativo</span>
+                <span class="d-block small text-muted">Podrás invitar a otras personas a aportar.</span>
+              </label>
+            </div>
+          </div>
+
           <input
-            type="radio"
-            class="btn-check"
-            name="tipo_reto_visual"
-            id="tipo_colaborativo"
-            autocomplete="off"
+            type="checkbox"
+            class="d-none"
+            id="es_colaborativo"
+            name="es_colaborativo"
             {% if quest and quest.es_colaborativo %}checked{% endif %}
           >
-          <label class="btn btn-outline-success w-100" for="tipo_colaborativo">
-            🤝 Colaborativo
-            <div class="d-block small text-muted">
-              Podrás invitar a otras personas a aportar.
+
+          <div class="quest-form-side-note mt-3">
+            <div class="small text-muted">
+              Podrás gestionar tus colaboradores una vez creado el reto.
             </div>
-          </label>
-        </div>
+          </div>
+
+          <hr class="my-4">
+
+          <div class="quest-form-actions d-grid gap-2">
+            <button type="submit" class="btn btn-primary fw-semibold btn-lg">
+              {% if quest and quest.id %}
+                Guardar cambios del reto
+              {% else %}
+                Crear reto
+              {% endif %}
+            </button>
+            <a href="{{ url_for('listar_quests') }}" class="btn btn-outline-secondary">
+              Cancelar
+            </a>
+          </div>
+        </section>
       </div>
-
-      {# Checkbox real que sigue usando la lógica actual del backend #}
-      <input
-        type="checkbox"
-        class="d-none"
-        id="es_colaborativo"
-        name="es_colaborativo"
-        {% if quest and quest.es_colaborativo %}checked{% endif %}
-      >
-      <p class="text-muted small mb-0 mt-1">
-        Podrás gestionar tus colaboradores una vez creado el reto.
-      </p>
-    </div>
-
-    <!-- Botones de acción -->
-    <div class="d-flex flex-column flex-md-row gap-2 mt-3">
-      <button type="submit" class="btn btn-primary fw-semibold">
-        {% if quest and quest.id %}
-          Guardar cambios del reto
-        {% else %}
-          Crear reto
-        {% endif %}
-      </button>
-      <a href="{{ url_for('listar_quests') }}" class="btn btn-outline-secondary">
-        Cancelar
-      </a>
     </div>
   </form>
 </div>
 
+{% block scripts_extra %}
 <script>
-  // Sin romper la lógica backend: sincronizamos los radios visuales con el checkbox real.
   document.addEventListener("DOMContentLoaded", function () {
     const chkColaborativo = document.getElementById("es_colaborativo");
     const radioIndividual = document.getElementById("tipo_individual");
@@ -198,9 +233,9 @@
       if (this.checked) setColaborativo(true);
     });
 
-    // Inicializar estado al cargar
     syncFromCheckbox();
   });
 </script>
+{% endblock %}
 
 {% endblock %}

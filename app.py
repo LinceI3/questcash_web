@@ -32,7 +32,7 @@ from models import (
 )
 
 from werkzeug.security import generate_password_hash, check_password_hash
-
+from ia.services.questy_engine import QuestyInput, evaluate_quest
 
 csrf = CSRFProtect()
 
@@ -104,6 +104,175 @@ def create_app():
     def inject_csrf():
         # Permite usar {{ csrf_token() }} en las plantillas
         return dict(csrf_token=generate_csrf)
+
+    PROFILE_RANKS = [
+        {
+            "key": "recluta",
+            "name": "Recluta del Ahorro",
+            "min_points": 0,
+            "color": "#9CA3AF",
+            "accent": "#E5E7EB",
+        },
+        {
+            "key": "cabo",
+            "name": "Cabo Financiero",
+            "min_points": 250,
+            "color": "#22C55E",
+            "accent": "#BBF7D0",
+        },
+        {
+            "key": "sargento",
+            "name": "Sargento del Ahorro",
+            "min_points": 700,
+            "color": "#3B82F6",
+            "accent": "#BFDBFE",
+        },
+        {
+            "key": "veterano",
+            "name": "Veterano Financiero",
+            "min_points": 1400,
+            "color": "#8B5CF6",
+            "accent": "#DDD6FE",
+        },
+        {
+            "key": "comandante",
+            "name": "Comandante del Ahorro",
+            "min_points": 2400,
+            "color": "#DC2626",
+            "accent": "#FECACA",
+        },
+        {
+            "key": "elite",
+            "name": "Élite Financiero",
+            "min_points": 3800,
+            "color": "#F59E0B",
+            "accent": "#FDE68A",
+        },
+        {
+            "key": "leyenda",
+            "name": "Leyenda Quest",
+            "min_points": 6000,
+            "color": "#FACC15",
+            "accent": "#FEF08A",
+        },
+        {
+            "key": "jefe_maestro",
+            "name": "Jefe Maestro del Ahorro",
+            "min_points": 9000,
+            "color": "#10B981",
+            "accent": "#FBBF24",
+        },
+    ]
+
+    def obtener_rango_perfil(puntos_totales):
+        puntos = int(puntos_totales or 0)
+        rango_actual = PROFILE_RANKS[0]
+        for rango in PROFILE_RANKS:
+            if puntos >= rango["min_points"]:
+                rango_actual = rango
+            else:
+                break
+        return rango_actual
+
+    def obtener_siguiente_rango_perfil(puntos_totales):
+        puntos = int(puntos_totales or 0)
+        for rango in PROFILE_RANKS:
+            if puntos < rango["min_points"]:
+                return rango
+        return None
+
+    def calcular_estado_rango_perfil(puntos_totales):
+        puntos = int(puntos_totales or 0)
+        rango_actual = obtener_rango_perfil(puntos)
+        siguiente_rango = obtener_siguiente_rango_perfil(puntos)
+
+        piso_actual = int(rango_actual["min_points"])
+        if siguiente_rango:
+            techo_siguiente = int(siguiente_rango["min_points"])
+            tramo_total = max(techo_siguiente - piso_actual, 1)
+            progreso_tramo = puntos - piso_actual
+            progreso_pct = max(0.0, min((progreso_tramo / tramo_total) * 100, 100.0))
+            puntos_restantes = max(techo_siguiente - puntos, 0)
+        else:
+            techo_siguiente = None
+            tramo_total = 0
+            progreso_tramo = 0
+            progreso_pct = 100.0
+            puntos_restantes = 0
+
+        return {
+            "current": rango_actual,
+            "next": siguiente_rango,
+            "current_name": rango_actual["name"],
+            "current_key": rango_actual["key"],
+            "current_color": rango_actual["color"],
+            "current_accent": rango_actual["accent"],
+            "current_min_points": piso_actual,
+            "next_name": siguiente_rango["name"] if siguiente_rango else None,
+            "next_min_points": techo_siguiente,
+            "points": puntos,
+            "points_into_rank": max(progreso_tramo, 0),
+            "points_remaining": puntos_restantes,
+            "progress_percent": round(progreso_pct, 1),
+            "is_max_rank": siguiente_rango is None,
+        }
+
+    def emitir_flash_logro(titulo, mensaje, extra=None):
+        payload = {
+            "title": titulo,
+            "message": mensaje,
+        }
+        if extra:
+            payload.update(extra)
+
+        icono = payload.get("icono")
+        if icono:
+            icono_str = str(icono).strip()
+            payload["icono"] = icono_str
+
+            lower_icono = icono_str.lower()
+            if lower_icono.endswith((".png", ".jpg", ".jpeg", ".webp", ".svg")):
+                payload["icono_tipo"] = "imagen"
+            else:
+                payload["icono_tipo"] = "clase"
+        else:
+            payload["icono_tipo"] = None
+
+        flash(payload, "achievement")
+
+    def emitir_flash_subida_rango(estado_rango):
+        if not estado_rango:
+            return
+
+        payload = {
+            "title": "¡Subiste de rango!",
+            "message": f"Ahora eres {estado_rango['current_name']}",
+            "rank_name": estado_rango["current_name"],
+            "rank_key": estado_rango["current_key"],
+            "rank_color": estado_rango["current_color"],
+            "rank_accent": estado_rango["current_accent"],
+            "points": estado_rango["points"],
+            "is_max_rank": estado_rango["is_max_rank"],
+            "next_name": estado_rango.get("next_name"),
+            "points_remaining": estado_rango.get("points_remaining", 0),
+        }
+        flash(payload, "rank_up")
+
+    @app.context_processor
+    def inject_rank_ui():
+        if getattr(g, "usuario_actual", None) is None:
+            return {
+                "current_user_rank": None,
+                "profile_ranks": PROFILE_RANKS,
+            }
+
+        estado_rango = calcular_estado_rango_perfil(
+            getattr(g.usuario_actual, "puntos_totales", 0) or 0
+        )
+        return {
+            "current_user_rank": estado_rango,
+            "profile_ranks": PROFILE_RANKS,
+        }
 
     # ----------------- Helpers de autenticación -----------------
 
@@ -344,16 +513,29 @@ def create_app():
     def otorgar_puntos_por_completado(quest):
         """
         Reparte los puntos del reto entre todos los participantes
-        (creador + colaboradores) cuando se completa y dispara insignias.
+        (creador + colaboradores) cuando se completa, dispara insignias
+        y avisa si algún usuario sube de rango.
         """
         if quest.puntos_otorgados or quest.puntos_recompensa <= 0:
             return
+
+        def notificar_subida_rango(usuario, puntos_ganados):
+            puntos_antes = int((getattr(usuario, "puntos_totales", 0) or 0) - puntos_ganados)
+            if puntos_antes < 0:
+                puntos_antes = 0
+
+            rango_antes = calcular_estado_rango_perfil(puntos_antes)
+            rango_despues = calcular_estado_rango_perfil(getattr(usuario, "puntos_totales", 0) or 0)
+
+            if rango_antes["current_key"] != rango_despues["current_key"]:
+                emitir_flash_subida_rango(rango_despues)
 
         participaciones = ParticipacionQuest.query.filter_by(quest_id=quest.id).all()
 
         if not participaciones:
             # Solo el creador
             quest.usuario.puntos_totales += quest.puntos_recompensa
+            notificar_subida_rango(quest.usuario, quest.puntos_recompensa)
             quest.puntos_otorgados = True
             # Insignias para el creador
             checar_insignias_por_evento(quest.usuario, "reto_completado", quest=quest)
@@ -364,6 +546,7 @@ def create_app():
 
         for p in participaciones:
             p.usuario.puntos_totales += puntos_por_usuario
+            notificar_subida_rango(p.usuario, puntos_por_usuario)
             checar_insignias_por_evento(p.usuario, "reto_completado", quest=quest)
 
         quest.puntos_otorgados = True
@@ -476,76 +659,429 @@ def create_app():
     def resumen_gastos_para_ia(usuario):
         """Resume los gastos del usuario para que Questy pueda dar mejores recomendaciones.
 
-        Devuelve:
-            {
-                "total_mes": float,
-                "por_categoria": {nombre: monto},
-                "categoria_top": str | None,
-                "categoria_top_monto": float,
-                "total_hormiga": float,
-                "hormiga_count": int,
-            }
+        Devuelve métricas del mes actual y comparación contra el mes anterior.
         """
         hoy = date.today()
         inicio_mes = hoy.replace(day=1)
+        fin_mes = hoy
 
-        gastos = (
+        ultimo_dia_mes_anterior = inicio_mes - timedelta(days=1)
+        inicio_mes_anterior = ultimo_dia_mes_anterior.replace(day=1)
+
+        gastos_mes = (
             Gasto.query
             .filter(
                 Gasto.usuario_id == usuario.id,
                 Gasto.fecha >= inicio_mes,
-                Gasto.fecha <= hoy,
+                Gasto.fecha <= fin_mes,
             )
             .all()
         )
 
-        if not gastos:
+        gastos_mes_anterior = (
+            Gasto.query
+            .filter(
+                Gasto.usuario_id == usuario.id,
+                Gasto.fecha >= inicio_mes_anterior,
+                Gasto.fecha <= ultimo_dia_mes_anterior,
+            )
+            .all()
+        )
+
+        def acumular_metricas(gastos_lista):
+            total = 0.0
+            por_categoria = {}
+            total_hormiga = 0.0
+            hormiga_count = 0
+            for gasto in gastos_lista:
+                monto = float(gasto.monto or 0)
+                total += monto
+
+                try:
+                    cat_nombre = gasto.categoria.nombre if gasto.categoria else "Otros"
+                except AttributeError:
+                    cat_nombre = "Otros"
+
+                por_categoria[cat_nombre] = por_categoria.get(cat_nombre, 0.0) + monto
+
+                if getattr(gasto, "es_hormiga", False):
+                    total_hormiga += monto
+                    hormiga_count += 1
+
+            categoria_top = None
+            categoria_top_monto = 0.0
+            categoria_top_porcentaje = 0.0
+            top_3 = []
+
+            if por_categoria:
+                categoria_top, categoria_top_monto = max(por_categoria.items(), key=lambda x: x[1])
+                if total > 0:
+                    categoria_top_porcentaje = (categoria_top_monto / total) * 100
+                top_3 = sorted(
+                    [
+                        {
+                            "nombre": nombre,
+                            "monto": monto,
+                            "porcentaje": ((monto / total) * 100) if total > 0 else 0.0,
+                        }
+                        for nombre, monto in por_categoria.items()
+                    ],
+                    key=lambda x: x["monto"],
+                    reverse=True,
+                )[:3]
+
             return {
-                "total_mes": 0.0,
-                "por_categoria": {},
-                "categoria_top": None,
-                "categoria_top_monto": 0.0,
-                "total_hormiga": 0.0,
-                "hormiga_count": 0,
+                "total": round(total, 2),
+                "por_categoria": por_categoria,
+                "categoria_top": categoria_top,
+                "categoria_top_monto": round(categoria_top_monto, 2),
+                "categoria_top_porcentaje": round(categoria_top_porcentaje, 2),
+                "top_3": top_3,
+                "total_hormiga": round(total_hormiga, 2),
+                "hormiga_count": hormiga_count,
+                "num_gastos": len(gastos_lista),
             }
 
-        total_mes = 0.0
-        por_categoria = {}
-        total_hormiga = 0.0
-        hormiga_count = 0
+        actual = acumular_metricas(gastos_mes)
+        anterior = acumular_metricas(gastos_mes_anterior)
 
-        for g in gastos:
-            monto = float(g.monto or 0)
-            total_mes += monto
+        total_mes = actual["total"]
+        total_mes_anterior = anterior["total"]
 
-            # Nombre legible de categoría (si existe relación)
-            try:
-                cat_nombre = g.categoria.nombre if g.categoria else "Otros"
-            except AttributeError:
-                cat_nombre = "Otros"
+        if total_mes_anterior > 0:
+            variacion_vs_mes_anterior = ((total_mes - total_mes_anterior) / total_mes_anterior) * 100
+        elif total_mes > 0:
+            variacion_vs_mes_anterior = 100.0
+        else:
+            variacion_vs_mes_anterior = 0.0
 
-            por_categoria[cat_nombre] = por_categoria.get(cat_nombre, 0.0) + monto
+        if variacion_vs_mes_anterior >= 10:
+            tendencia_gasto = "subiendo"
+        elif variacion_vs_mes_anterior <= -10:
+            tendencia_gasto = "bajando"
+        else:
+            tendencia_gasto = "estable"
 
-            if getattr(g, "es_hormiga", False):
-                total_hormiga += monto
-                hormiga_count += 1
+        dias_del_mes_transcurridos = max((fin_mes - inicio_mes).days + 1, 1)
+        promedio_diario = total_mes / dias_del_mes_transcurridos if dias_del_mes_transcurridos > 0 else 0.0
 
-        categoria_top = None
-        categoria_top_monto = 0.0
-        if por_categoria:
-            categoria_top, categoria_top_monto = max(
-                por_categoria.items(), key=lambda x: x[1]
-            )
+        ingreso_estimado = calcular_ingreso_mensual_usuario(usuario)
+        porcentaje_ingreso_gastado = ((total_mes / ingreso_estimado) * 100) if ingreso_estimado > 0 else 0.0
+
+        # Margen redirigible conservador para recomendaciones:
+        # 30% de gasto hormiga + 15% de la categoría principal.
+        margen_redirigible = (actual["total_hormiga"] * 0.30) + (actual["categoria_top_monto"] * 0.15)
+        margen_redirigible = round(margen_redirigible, 2)
 
         return {
             "total_mes": total_mes,
-            "por_categoria": por_categoria,
-            "categoria_top": categoria_top,
-            "categoria_top_monto": categoria_top_monto,
-            "total_hormiga": total_hormiga,
-            "hormiga_count": hormiga_count,
+            "total_mes_anterior": total_mes_anterior,
+            "variacion_vs_mes_anterior": round(variacion_vs_mes_anterior, 2),
+            "tendencia_gasto": tendencia_gasto,
+            "promedio_diario": round(promedio_diario, 2),
+            "porcentaje_ingreso_gastado": round(porcentaje_ingreso_gastado, 2),
+            "margen_redirigible": margen_redirigible,
+            "por_categoria": actual["por_categoria"],
+            "categoria_top": actual["categoria_top"],
+            "categoria_top_monto": actual["categoria_top_monto"],
+            "categoria_top_porcentaje": actual["categoria_top_porcentaje"],
+            "top_3_categorias": actual["top_3"],
+            "total_hormiga": actual["total_hormiga"],
+            "hormiga_count": actual["hormiga_count"],
+            "num_gastos": actual["num_gastos"],
         }
 
+    def calcular_ingreso_mensual_usuario(usuario):
+        """Estimación simple del ingreso mensual del usuario.
+
+        Prioridad:
+        1) Campo explícito en Usuario si existe.
+        2) Promedio mensual de aportes de los últimos 90 días.
+        3) 0 como fallback.
+        """
+        ingreso_campo = getattr(usuario, "ingreso_mensual", None)
+        if ingreso_campo is not None:
+            try:
+                ingreso_val = float(ingreso_campo)
+                if ingreso_val >= 0:
+                    return ingreso_val
+            except (TypeError, ValueError):
+                pass
+
+        hoy_dt = datetime.utcnow()
+        hace_90 = hoy_dt - timedelta(days=90)
+        movs_90 = (
+            Movimiento.query
+            .filter(
+                Movimiento.usuario_id == usuario.id,
+                Movimiento.tipo == "aporte",
+                Movimiento.fecha >= hace_90,
+            )
+            .all()
+        )
+        total_90 = sum(float(m.monto or 0) for m in movs_90)
+        if total_90 > 0:
+            return round(total_90 / 3, 2)
+
+        return 0.0
+
+    def calcular_gasto_mensual_usuario(usuario):
+        """Obtiene el gasto mensual actual del usuario usando el módulo de gastos."""
+        gastos_info = resumen_gastos_para_ia(usuario)
+        return round(float(gastos_info.get("total_mes", 0.0) or 0.0), 2)
+
+    def calcular_edad_usuario(usuario):
+        """Obtiene la edad del usuario si existe; usa 23 como fallback."""
+        edad_attr = getattr(usuario, "edad", None)
+        if edad_attr is not None:
+            try:
+                edad_val = int(edad_attr)
+                if 18 <= edad_val <= 29:
+                    return edad_val
+            except (TypeError, ValueError):
+                pass
+        return 23
+
+    def contar_metas_completadas_usuario(usuario):
+        """Cuenta las metas completadas donde el usuario participa."""
+        quests = obtener_quests_usuario(usuario)
+        return sum(1 for q in quests if q.estatus == "completado")
+
+    def construir_questy_input(usuario, quest):
+        """Construye el payload real para evaluar una meta con Questy."""
+        hoy = date.today()
+        dias_restantes = (quest.fecha_limite - hoy).days if quest.fecha_limite else 30
+        if dias_restantes <= 0:
+            dias_restantes = 1
+
+        participaciones = ParticipacionQuest.query.filter_by(quest_id=quest.id).count()
+        colaboradores = max(participaciones - 1, 0)
+
+        total_points_before = int(getattr(usuario, "puntos_totales", 0) or 0)
+        _estado_rango_perfil = calcular_estado_rango_perfil(total_points_before)
+        completed_goals = contar_metas_completadas_usuario(usuario)
+        age = calcular_edad_usuario(usuario)
+        monthly_income = calcular_ingreso_mensual_usuario(usuario)
+        monthly_expense = calcular_gasto_mensual_usuario(usuario)
+
+        return QuestyInput(
+            user_name=getattr(usuario, "nombre", "Usuario") or "Usuario",
+            age=age,
+            monthly_income=monthly_income,
+            monthly_expense=monthly_expense,
+            goal_name=quest.nombre,
+            goal_amount=float(quest.monto_objetivo or 0),
+            deadline_days=dias_restantes,
+            collaborators=colaboradores,
+            total_points_before=total_points_before,
+            current_saved_amount=float(quest.monto_actual or 0),
+            completed_goals=completed_goals,
+        )
+
+    def humanizar_segmento_questy(segmento):
+        """Convierte el segmento técnico en una etiqueta legible para UI."""
+        if not segmento:
+            return "Perfil joven"
+
+        partes = str(segmento).split("_")
+        if len(partes) < 3:
+            return "Perfil joven"
+
+        ingreso = partes[1]
+        presion = partes[2]
+
+        ingreso_map = {
+            "bajo": "ingreso bajo",
+            "medio": "ingreso medio",
+            "alto": "ingreso alto",
+        }
+
+        # contemplar segmentos como medio_bajo / medio_alto
+        if len(partes) >= 4 and partes[1] == "medio":
+            ingreso = f"medio_{partes[2]}"
+            presion = partes[3]
+
+        ingreso_map.update({
+            "medio_bajo": "ingreso medio-bajo",
+            "medio_alto": "ingreso medio-alto",
+        })
+
+        presion_map = {
+            "baja": "presión baja",
+            "media": "presión media",
+            "alta": "presión alta",
+            "sin_dato": "presión sin dato",
+        }
+
+        ingreso_txt = ingreso_map.get(ingreso, ingreso.replace("_", "-"))
+        presion_txt = presion_map.get(presion, presion.replace("_", " "))
+
+        return f"Jóvenes con {ingreso_txt} y {presion_txt}"
+
+    def seleccionar_meta_prioritaria(resultados_ia):
+        """Elige la meta activa que más urge por probabilidad y tiempo restante."""
+        activos = [
+            item for item in resultados_ia.get("analisis_por_quest", [])
+            if item["quest"].estatus not in ["completado", "cancelado"]
+        ]
+
+        if not activos:
+            return None
+
+        def prioridad(item):
+            prob = item.get("probabilidad_num", 0)
+            dias_restantes = item.get("dias_restantes", 9999)
+            faltante = item.get("faltante", 0)
+            return (prob, dias_restantes, -faltante)
+
+        return sorted(activos, key=prioridad)[0]
+
+    def generar_resumen_questy_usuario(usuario, resultados_ia, gastos_resumen, questy_panels):
+        """Genera un resumen general para la vista de Questy con lectura útil y accionable."""
+        resumen = resultados_ia.get("resumen_global", {})
+        meta_prioritaria = seleccionar_meta_prioritaria(resultados_ia)
+
+        metas_activas = resumen.get("activos", 0)
+        metas_completadas = resumen.get("completados", 0)
+        total_mes_gastos = float(gastos_resumen.get("total_mes", 0.0) or 0.0)
+        total_mes_anterior = float(gastos_resumen.get("total_mes_anterior", 0.0) or 0.0)
+        variacion_vs_mes_anterior = float(gastos_resumen.get("variacion_vs_mes_anterior", 0.0) or 0.0)
+        tendencia_gasto = gastos_resumen.get("tendencia_gasto", "estable")
+        promedio_diario = float(gastos_resumen.get("promedio_diario", 0.0) or 0.0)
+        porcentaje_ingreso_gastado = float(gastos_resumen.get("porcentaje_ingreso_gastado", 0.0) or 0.0)
+        margen_redirigible = float(gastos_resumen.get("margen_redirigible", 0.0) or 0.0)
+        categoria_top = gastos_resumen.get("categoria_top")
+        categoria_top_monto = float(gastos_resumen.get("categoria_top_monto", 0.0) or 0.0)
+        categoria_top_porcentaje = float(gastos_resumen.get("categoria_top_porcentaje", 0.0) or 0.0)
+        total_hormiga = float(gastos_resumen.get("total_hormiga", 0.0) or 0.0)
+        hormiga_count = int(gastos_resumen.get("hormiga_count", 0) or 0)
+
+        if metas_activas == 0:
+            respuesta_rapida = (
+                "Hoy no tienes metas activas. Un buen siguiente paso sería crear una meta pequeña "
+                "para que Questy pueda empezar a medir tu ritmo y darte recomendaciones más precisas."
+            )
+        else:
+            respuesta_rapida = (
+                f"Hoy veo {metas_activas} meta(s) activa(s) y {metas_completadas} completada(s). "
+                "Ya puedo darte una lectura más clara de tus prioridades y de cómo tus gastos afectan tu avance."
+            )
+
+        alerta_texto = None
+        if meta_prioritaria:
+            q = meta_prioritaria["quest"]
+            prob = meta_prioritaria.get("probabilidad_num", 0)
+            dias_restantes = meta_prioritaria.get("dias_restantes", 0)
+            faltante = meta_prioritaria.get("faltante", 0)
+            ahorro_diario = meta_prioritaria.get("ahorro_diario_recomendado", 0)
+
+            if prob <= 40:
+                alerta_texto = (
+                    f"La meta que más urge ahorita es '{q.nombre}': le quedan {dias_restantes} día(s), aún faltan "
+                    f"{faltante:,.0f} MXN y para mantener el ritmo ideal necesitarías cerca de {ahorro_diario:,.0f} MXN diarios."
+                )
+            elif total_mes_gastos > 0 and margen_redirigible > 0 and margen_redirigible >= ahorro_diario * 7:
+                alerta_texto = (
+                    f"Tu meta prioritaria sigue siendo '{q.nombre}'. La buena noticia es que tu patrón de gasto actual deja un margen potencial "
+                    f"de unos {margen_redirigible:,.0f} MXN que podrías redirigir sin tocar todo tu consumo."
+                )
+            else:
+                alerta_texto = (
+                    f"Tu meta con mayor prioridad actual es '{q.nombre}'. Todavía está en rango manejable, "
+                    "pero conviene no dejarla enfriarse."
+                )
+        elif metas_activas > 0:
+            alerta_texto = "Tus metas activas no muestran alertas críticas por ahora."
+
+        consejo_texto = None
+        if total_mes_gastos > 0 and categoria_top:
+            if categoria_top_porcentaje >= 35:
+                consejo_texto = (
+                    f"Tu gasto dominante este mes está en '{categoria_top}' con aproximadamente {categoria_top_monto:,.0f} MXN, "
+                    f"lo que representa cerca del {categoria_top_porcentaje:,.0f}% de tus gastos del mes. "
+                    "Ese rubro es el primer lugar donde Questy buscaría margen para empujar tu meta principal."
+                )
+            else:
+                consejo_texto = (
+                    f"Este mes llevas alrededor de {total_mes_gastos:,.0f} MXN en gastos, con un promedio diario de {promedio_diario:,.0f} MXN. "
+                    f"La categoría más fuerte por ahora es '{categoria_top}' con {categoria_top_monto:,.0f} MXN."
+                )
+        elif total_hormiga > 0:
+            consejo_texto = (
+                f"Llevas alrededor de {total_hormiga:,.0f} MXN en {hormiga_count} gasto(s) hormiga este mes. "
+                "Incluso una parte de esa fuga podría convertirse en progreso real para tus metas."
+            )
+        else:
+            consejo_texto = (
+                "Aún necesito más gastos registrados para detectar patrones finos, pero ya puedo ayudarte con el ritmo de tus metas."
+            )
+
+        if total_mes_anterior > 0:
+            consejo_texto += (
+                f" Frente al mes anterior, tu gasto va {tendencia_gasto} ({variacion_vs_mes_anterior:+.0f}%)."
+            )
+
+        accion_texto = None
+        if meta_prioritaria:
+            q = meta_prioritaria["quest"]
+            ahorro_diario = meta_prioritaria.get("ahorro_diario_recomendado", 0)
+            ahorro_semanal = ahorro_diario * 7
+            if margen_redirigible > 0:
+                accion_texto = (
+                    f"Si quieres mejorar tu posición ahora mismo, enfócate en '{q.nombre}'. "
+                    f"Tu meta pide cerca de {ahorro_diario:,.0f} MXN diarios ({ahorro_semanal:,.0f} por semana) y hoy Questy estima un margen redirigible de unos {margen_redirigible:,.0f} MXN."
+                )
+            else:
+                accion_texto = (
+                    f"Si quieres mejorar tu posición ahora mismo, enfócate en '{q.nombre}' y apunta a unos {ahorro_diario:,.0f} MXN diarios "
+                    "mientras siga abierta."
+                )
+        elif metas_activas == 0:
+            accion_texto = "Tu mejor siguiente movimiento es crear una meta para que Questy empiece a acompañar tu progreso."
+        else:
+            accion_texto = "Tu mejor siguiente movimiento es mantener constancia con tus aportes esta semana."
+
+        metas_resumen = []
+        for panel in questy_panels[:4]:
+            quest = panel["quest"]
+            result = panel["result"]
+            esfuerzo_mensual = float(result.get("monthly_goal_effort", 0.0) or 0.0)
+            puntos_finales = result.get("puntos_finales", quest.puntos_recompensa or 0)
+
+            if margen_redirigible > 0 and esfuerzo_mensual > 0:
+                if margen_redirigible >= esfuerzo_mensual:
+                    lectura_extra = "Tu gasto actual deja un margen que podría cubrir por sí solo el esfuerzo mensual estimado."
+                elif margen_redirigible >= (esfuerzo_mensual * 0.5):
+                    lectura_extra = "Tu patrón de gasto deja un margen parcial que sí podría acelerar esta meta si lo rediriges."
+                else:
+                    lectura_extra = "Esta meta depende más de constancia en aportes que de recortar gasto reciente."
+            else:
+                lectura_extra = "Aún necesito más gasto registrado para cruzar esta meta con un patrón de consumo sólido."
+
+            metas_resumen.append({
+                "id": quest.id,
+                "nombre": quest.nombre,
+                "puntos_finales": puntos_finales,
+                "dificultad": result.get("dificultad_label", "equilibrada"),
+                "segmento_legible": panel.get("segmento_legible", humanizar_segmento_questy(result.get("segmento"))),
+                "mensaje": result.get("questy_message"),
+                "avance": round(float(quest.progreso_porcentaje()), 1),
+                "lectura_gasto": lectura_extra,
+                "esfuerzo_mensual": round(esfuerzo_mensual, 2),
+            })
+
+        return {
+            "respuesta_rapida": respuesta_rapida,
+            "alerta_texto": alerta_texto,
+            "consejo_texto": consejo_texto,
+            "accion_texto": accion_texto,
+            "metas_resumen": metas_resumen,
+            "meta_prioritaria": meta_prioritaria["quest"] if meta_prioritaria else None,
+            "tendencia_gasto": tendencia_gasto,
+            "variacion_vs_mes_anterior": variacion_vs_mes_anterior,
+            "margen_redirigible": margen_redirigible,
+            "porcentaje_ingreso_gastado": porcentaje_ingreso_gastado,
+        }
 
     def generar_consejos_financieros(usuario, resultados_ia):
         """Genera una lista de consejos financieros personalizados usando el análisis de IA y movimientos recientes."""
@@ -915,10 +1451,13 @@ def create_app():
             # no importa: se volverá a recompensar solo al cruzar de nuevo el límite.
             if racha_antes < limite <= racha_despues:
                 usuario.puntos_totales += puntos
-                flash(
-                    f"🔥 ¡Lograste una racha de {limite} días seguidos ahorrando! "
-                    f"Has ganado +{puntos} puntos QuestCash.",
-                    "success",
+                emitir_flash_logro(
+                    titulo="Racha desbloqueada",
+                    mensaje=f"🔥 Alcanzaste {limite} días seguidos ahorrando y ganaste +{puntos} puntos QuestCash.",
+                    extra={
+                        "streak_days": limite,
+                        "points_bonus": puntos,
+                    },
                 )
 
 
@@ -942,7 +1481,16 @@ def create_app():
         )
         db.session.add(nueva)
         # Sin commit aquí; se hará en la vista que llama
-        flash(f"¡Nuevo logro desbloqueado! {insignia.nombre} 🎖️", "success")
+        emitir_flash_logro(
+            titulo="Logro desbloqueado",
+            mensaje=f"{insignia.nombre}",
+            extra={
+                "rareza": insignia.rareza,
+                "icono": insignia.icono,
+                "codigo": insignia.codigo,
+                "descripcion": insignia.descripcion,
+            },
+        )
 
     def checar_insignias_por_evento(usuario, evento, quest=None):
         """Evalúa y otorga insignias según un evento usando los códigos nuevos."""
@@ -1150,6 +1698,42 @@ def create_app():
 
         quests.sort(key=lambda q: q.fecha_limite)
 
+        # Núcleo lógico de Questy para dashboard
+        resultados_ia = analizar_habitos_ahorro(g.usuario_actual)
+        gastos_resumen = resumen_gastos_para_ia(g.usuario_actual)
+
+        questy_panels = []
+        quests_activos_dashboard = [q for q in quests if q.estatus not in ["cancelado", "completado"]]
+        for q in quests_activos_dashboard[:3]:
+            try:
+                questy_input = construir_questy_input(g.usuario_actual, q)
+                questy_result = evaluate_quest(questy_input).to_dict()
+                questy_panels.append({
+                    "quest": q,
+                    "result": questy_result,
+                    "segmento_legible": humanizar_segmento_questy(questy_result.get("segmento")),
+                })
+            except Exception:
+                continue
+
+        questy_home = generar_resumen_questy_usuario(
+            g.usuario_actual,
+            resultados_ia,
+            gastos_resumen,
+            questy_panels,
+        )
+
+        questy_dashboard = {
+            "alerta_principal": questy_home.get("alerta_texto"),
+            "accion_principal": questy_home.get("accion_texto"),
+            "consejo_principal": questy_home.get("consejo_texto"),
+            "meta_prioritaria": questy_home.get("meta_prioritaria"),
+            "margen_redirigible": questy_home.get("margen_redirigible", 0.0),
+            "tendencia_gasto": questy_home.get("tendencia_gasto"),
+            "variacion_vs_mes_anterior": questy_home.get("variacion_vs_mes_anterior", 0.0),
+            "porcentaje_ingreso_gastado": questy_home.get("porcentaje_ingreso_gastado", 0.0),
+        }
+
         total_objetivo = sum(q.monto_objetivo for q in quests) or 0
         total_actual = sum(q.monto_actual for q in quests) or 0
 
@@ -1190,6 +1774,8 @@ def create_app():
             racha_actual=rachas["racha_actual"],
             mejor_racha=rachas["mejor_racha"],
             racha_ultimo_dia=rachas["ultimo_dia"],
+            questy_dashboard=questy_dashboard,
+            rank_state=calcular_estado_rango_perfil(getattr(g.usuario_actual, "puntos_totales", 0) or 0),
         )
 
     @app.route("/notificaciones")
@@ -1211,6 +1797,28 @@ def create_app():
         consejos = generar_consejos_financieros(g.usuario_actual, resultados)
         resultado_simulador = None
         gastos_resumen = resumen_gastos_para_ia(g.usuario_actual)
+        questy_panels = []
+        quests_usuario = obtener_quests_usuario(g.usuario_actual)
+        quests_activos = [q for q in quests_usuario if q.estatus not in ["cancelado", "completado"]]
+
+        for q in quests_activos[:4]:
+            try:
+                questy_input = construir_questy_input(g.usuario_actual, q)
+                questy_result = evaluate_quest(questy_input).to_dict()
+                questy_panels.append({
+                    "quest": q,
+                    "result": questy_result,
+                    "segmento_legible": humanizar_segmento_questy(questy_result.get("segmento")),
+                })
+            except Exception:
+                continue
+
+        questy_home = generar_resumen_questy_usuario(
+            g.usuario_actual,
+            resultados,
+            gastos_resumen,
+            questy_panels,
+        )
 
         if request.method == "POST":
             # Leer datos del simulador
@@ -1296,17 +1904,23 @@ def create_app():
             consejos_financieros=consejos,
             resultado_simulador=resultado_simulador,
             gastos_resumen=gastos_resumen,
+            questy_panels=questy_panels,
+            questy_home=questy_home,
+            rank_state=calcular_estado_rango_perfil(getattr(g.usuario_actual, "puntos_totales", 0) or 0),
         )
 
     @app.route("/estadisticas")
     @login_requerido
     def ver_estadisticas():
         datos = calcular_estadisticas(g.usuario_actual)
+        resultados_ia = analizar_habitos_ahorro(g.usuario_actual)
+
         return render_template(
             "estadisticas.html",
             resumen=datos["resumen"],
             serie_30=datos["serie_30_dias"],
             serie_metas=datos["serie_por_meta"],
+            analisis=resultados_ia["analisis_por_quest"],
         )
 
     def obtener_o_crear_categoria_gasto(nombre_raw):
@@ -1584,7 +2198,7 @@ def create_app():
                 fecha_creacion=fecha_creacion,
             )
 
-            puntos_calc = calcular_puntos_quest(
+            puntos_base_calc = calcular_puntos_quest(
                 monto_objetivo_float,
                 fecha_limite_date,
                 dificultad_calc,
@@ -1601,7 +2215,7 @@ def create_app():
                 fecha_creacion=fecha_creacion,
                 dificultad=dificultad_calc,
                 estatus="pendiente",
-                puntos_recompensa=puntos_calc,
+                puntos_recompensa=puntos_base_calc,
                 usuario_id=g.usuario_actual.id,
                 es_colaborativo=es_colaborativo,
                 tipo=tipo,
@@ -1609,6 +2223,12 @@ def create_app():
 
             db.session.add(nueva_quest)
             db.session.flush()
+            try:
+                questy_input = construir_questy_input(g.usuario_actual, nueva_quest)
+                questy_result = evaluate_quest(questy_input)
+                nueva_quest.puntos_recompensa = questy_result.puntos_finales
+            except Exception:
+                nueva_quest.puntos_recompensa = puntos_base_calc
 
             participacion_creador = ParticipacionQuest(
                 usuario_id=g.usuario_actual.id,
@@ -1641,11 +2261,20 @@ def create_app():
 
         participaciones = ParticipacionQuest.query.filter_by(quest_id=quest.id).all()
 
+        questy_result = None
+        try:
+            questy_input = construir_questy_input(g.usuario_actual, quest)
+            questy_result = evaluate_quest(questy_input).to_dict()
+            questy_result["puntos_finales"] = int(quest.puntos_recompensa or 0)
+        except Exception:
+            questy_result = None
+
         return render_template(
             "quests/detail.html",
             quest=quest,
             es_creador=es_creador,
             participaciones=participaciones,
+            questy_result=questy_result,
         )
 
     # EDITAR QUEST (solo creador)
@@ -1736,7 +2365,7 @@ def create_app():
                 fecha_creacion=fecha_creacion,
             )
 
-            puntos_calc = calcular_puntos_quest(
+            puntos_base_calc = calcular_puntos_quest(
                 monto_objetivo_float,
                 fecha_limite_date,
                 dificultad_calc,
@@ -1750,9 +2379,16 @@ def create_app():
             quest.monto_actual = monto_actual_float
             quest.fecha_limite = fecha_limite_date
             quest.dificultad = dificultad_calc
-            quest.puntos_recompensa = puntos_calc
+            quest.puntos_recompensa = puntos_base_calc
             quest.es_colaborativo = es_colaborativo
             quest.tipo = tipo
+
+            try:
+                questy_input = construir_questy_input(g.usuario_actual, quest)
+                questy_result = evaluate_quest(questy_input)
+                quest.puntos_recompensa = questy_result.puntos_finales
+            except Exception:
+                quest.puntos_recompensa = puntos_base_calc
 
             # Cancelación manual
             if quest.estatus != "cancelado" and cancelar:
@@ -1907,14 +2543,23 @@ def create_app():
             else:
                 quest.monto_actual -= monto_float
 
-            # Actualizar estatus automáticamente
-            if quest.estatus == "pendiente" and tipo == "aporte":
-                quest.estatus = "en_progreso"
+            # Recalcular la recompensa contextual del reto antes de evaluar si se completa.
+            # Así, los puntos que se muestran y los que realmente se otorgan salen de la misma fuente.
+            try:
+                questy_input = construir_questy_input(g.usuario_actual, quest)
+                questy_result = evaluate_quest(questy_input)
+                quest.puntos_recompensa = int(questy_result.puntos_finales or 0)
+            except Exception:
+                pass
 
+            # Actualizar estatus automáticamente
             if quest.monto_actual >= quest.monto_objetivo and quest.estatus != "cancelado":
+                quest.monto_actual = quest.monto_objetivo
                 if quest.estatus != "completado":
                     quest.estatus = "completado"
                     otorgar_puntos_por_completado(quest)
+            elif quest.monto_actual > 0 and quest.estatus == "pendiente":
+                quest.estatus = "en_progreso"
 
             # Insignia por primer movimiento (si aplica)
             checar_insignias_por_evento(g.usuario_actual, "primer_movimiento")
@@ -2024,14 +2669,23 @@ def create_app():
             else:
                 quest.monto_actual -= monto_float
 
-            # Actualizar estatus automáticamente
-            if quest.estatus == "pendiente" and tipo == "aporte":
-                quest.estatus = "en_progreso"
+            # Recalcular la recompensa contextual del reto antes de evaluar si se completa.
+            # Así, los puntos que se muestran y los que realmente se otorgan salen de la misma fuente.
+            try:
+                questy_input = construir_questy_input(g.usuario_actual, quest)
+                questy_result = evaluate_quest(questy_input)
+                quest.puntos_recompensa = int(questy_result.puntos_finales or 0)
+            except Exception:
+                pass
 
+            # Actualizar estatus automáticamente
             if quest.monto_actual >= quest.monto_objetivo and quest.estatus != "cancelado":
+                quest.monto_actual = quest.monto_objetivo
                 if quest.estatus != "completado":
                     quest.estatus = "completado"
                     otorgar_puntos_por_completado(quest)
+            elif quest.monto_actual > 0 and quest.estatus == "pendiente":
+                quest.estatus = "en_progreso"
 
             # Insignia por primer movimiento (si aplica)
             checar_insignias_por_evento(g.usuario_actual, "primer_movimiento")

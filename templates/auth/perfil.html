@@ -10,7 +10,11 @@
   </div>
 
   <div class="d-none d-md-block text-end">
-    {% if usuario.alias %}
+    {% if current_user_rank %}
+      <span class="badge fw-semibold" style="background: {{ current_user_rank.current_accent }}; color: {{ current_user_rank.current_color }}; border: 1px solid {{ current_user_rank.current_color }}33;">
+        {{ current_user_rank.current_name }} · {{ current_user_rank.points }} pts
+      </span>
+    {% elif usuario.alias %}
       <span class="badge bg-primary-subtle text-primary fw-semibold">
         🎮 Alias: {{ usuario.alias }}
       </span>
@@ -69,10 +73,55 @@
           <p class="mb-1 fw-semibold">{{ usuario.nombre }}</p>
           <p class="mb-0 small text-muted">{{ usuario.correo }}</p>
         </div>
+
       </div>
 
       <!-- DATOS Y PREFERENCIAS -->
       <div class="col-md-8">
+
+        {% if current_user_rank %}
+          <div class="qc-rank-summary-card mb-4">
+            <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3">
+              <div>
+                <p class="text-muted small mb-1">Progreso de rango</p>
+                <h3 class="h6 fw-bold mb-1" style="color: {{ current_user_rank.current_color }};">
+                  {{ current_user_rank.current_name }}
+                </h3>
+                <p class="text-muted small mb-0">
+                  {% if current_user_rank.is_max_rank %}
+                    Ya alcanzaste el rango más alto disponible.
+                  {% else %}
+                    Te faltan {{ current_user_rank.points_remaining }} pts para subir a {{ current_user_rank.next_name }}.
+                  {% endif %}
+                </p>
+              </div>
+              <button
+                type="button"
+                class="btn btn-outline-secondary btn-sm"
+                data-bs-toggle="modal"
+                data-bs-target="#rankInfoModal"
+              >
+                Ver rangos
+              </button>
+            </div>
+
+            <div class="qc-rank-hero-progress mt-3 mb-2">
+              <div
+                class="qc-rank-hero-progress-bar"
+                style="width: {{ current_user_rank.progress_percent }}%; background: {{ current_user_rank.current_color }};"
+              ></div>
+            </div>
+
+            <div class="d-flex justify-content-between small text-muted">
+              <span>{{ current_user_rank.current_min_points }} pts</span>
+              {% if current_user_rank.next_min_points %}
+                <span>{{ current_user_rank.next_min_points }} pts</span>
+              {% else %}
+                <span>MAX</span>
+              {% endif %}
+            </div>
+          </div>
+        {% endif %}
 
         <!-- Datos personales -->
         <h5 class="h6 fw-bold mb-3">Datos de tu cuenta</h5>
@@ -195,6 +244,45 @@
   </div>
 </form>
 
+{% if profile_ranks %}
+<div class="modal fade" id="rankInfoModal" tabindex="-1" aria-labelledby="rankInfoModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content qc-rank-modal">
+      <div class="modal-header border-0 pb-0">
+        <div>
+          <h5 class="modal-title fw-bold" id="rankInfoModalLabel">Sistema de rangos QuestCash</h5>
+          <p class="text-muted small mb-0">Cada rango depende de tus puntos QuestCash acumulados.</p>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+      </div>
+      <div class="modal-body pt-3">
+        <div class="row g-3">
+          {% for rank in profile_ranks %}
+            {% set is_current = current_user_rank and current_user_rank.current_key == rank.key %}
+            <div class="col-md-6">
+              <div class="qc-rank-modal-item {% if is_current %}qc-rank-modal-item-current{% endif %}">
+                <div class="d-flex justify-content-between align-items-center gap-3 mb-2">
+                  <div class="d-flex align-items-center gap-2">
+                    <span class="qc-rank-dot" style="background: {{ rank.color }};"></span>
+                    <span class="fw-semibold" style="color: {{ rank.color }};">{{ rank.name }}</span>
+                  </div>
+                  <span class="small text-muted">{{ rank.min_points }} pts</span>
+                </div>
+                {% if is_current %}
+                  <div class="small fw-semibold" style="color: {{ rank.color }};">Tu rango actual</div>
+                {% else %}
+                  <div class="small text-muted">Disponible a partir de {{ rank.min_points }} puntos.</div>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <style>
 .qc-upload-btn {
   display: inline-block;
@@ -210,6 +298,60 @@
 
 .qc-upload-btn:hover {
   background: #e4e6eb;
+}
+
+.qc-rank-summary-card {
+  background: rgba(15, 23, 42, 0.03);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 18px;
+  padding: 1rem 1.1rem;
+}
+
+.qc-rank-help-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 999px;
+  font-weight: 700;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.qc-rank-hero-progress {
+  width: 100%;
+  height: 12px;
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.qc-rank-hero-progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.45s ease;
+}
+
+.qc-rank-modal .modal-content,
+.qc-rank-modal {
+  border-radius: 24px;
+}
+
+.qc-rank-modal-item {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 18px;
+  padding: 0.95rem 1rem;
+  background: rgba(15, 23, 42, 0.03);
+}
+
+.qc-rank-modal-item-current {
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.10);
+}
+
+.qc-rank-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  display: inline-block;
 }
 </style>
 {% endblock %}

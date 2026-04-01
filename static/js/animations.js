@@ -5,39 +5,34 @@ document.addEventListener("DOMContentLoaded", () => {
   // ------------ ANIMACIÓN DE ENTRADA GENERAL ------------
   const mainEl = document.querySelector("main, .page-fade, .container.page-fade");
   if (mainEl) {
-    // Estado inicial seguro
-    gsap.set(mainEl, { opacity: 0, y: 20 });
-
-    // Animación de entrada: siempre termina en opacity: 1
-    gsap.to(mainEl, {
-      opacity: 1,
-      y: 0,
-      duration: 0.45,
+    // No tocamos opacity del contenedor principal para evitar vistas "apagadas".
+    gsap.from(mainEl, {
+      y: 12,
+      duration: 0.32,
       ease: "power2.out",
-      clearProps: "opacity,transform",
+      clearProps: "transform",
+      overwrite: true,
     });
 
-    // Salvavidas extra por si alguna animación falla:
+    // Salvavidas extra por si alguna animación falla.
     setTimeout(() => {
       mainEl.style.opacity = "1";
       mainEl.style.transform = "none";
-    }, 900);
+      mainEl.style.filter = "none";
+    }, 700);
   }
 
   // ------------ TARJETAS PRINCIPALES (qc-card) ------------
   const cards = gsap.utils.toArray(".qc-card");
   if (cards.length) {
-    // Estado inicial controlado por GSAP
-    gsap.set(cards, { opacity: 0, y: 18 });
-
-    // Animación hacia un estado final completamente visible
-    gsap.to(cards, {
-      opacity: 1,
-      y: 0,
-      duration: 0.5,
+    gsap.from(cards, {
+      opacity: 0,
+      y: 18,
+      duration: 0.42,
       stagger: 0.05,
-      ease: "back.out(1.4)",
+      ease: "power2.out",
       clearProps: "opacity,transform",
+      overwrite: true,
     });
   }
 
@@ -131,19 +126,112 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // ------------ VANILLATILT (2.5D EN TARJETAS / INSIGNIAS) ------------
-  if (window.VanillaTilt) {
-    const tiltElements = document.querySelectorAll(
-      ".qc-card:not(.auth-card), .quest-card, .qc-badge-image"
+  // ------------ SALVAVIDAS GLOBAL DE VISIBILIDAD ------------
+  window.setTimeout(() => {
+    const safetyTargets = document.querySelectorAll(
+      "main, .page-fade, .container.page-fade, .qc-card, .quest-card, .qc-pill, .movement-item, .notif-item, .ring, .ring-sm"
     );
-    if (tiltElements.length) {
-      VanillaTilt.init(tiltElements, {
-        max: 8,
-        speed: 400,
-        glare: true,
-        "max-glare": 0.15,
-        scale: 1.0,
+
+    safetyTargets.forEach((el) => {
+      el.style.opacity = "1";
+      el.style.transform = "none";
+      el.style.filter = "none";
+    });
+  }, 1200);
+
+  // ------------ HOVER LIFT (elevar elementos al pasar el mouse) ------------
+  const canHover = window.matchMedia && window.matchMedia("(hover: hover)").matches;
+  const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  if (canHover && !reduceMotion) {
+    const hoverLiftElements = document.querySelectorAll(
+      ".qc-card:not(.auth-card), .quest-card, .qc-user-chip, .qc-badge-image"
+    );
+
+    hoverLiftElements.forEach((el) => {
+      let isAnimating = false;
+
+      el.addEventListener("mouseenter", () => {
+        if (isAnimating) return;
+        isAnimating = true;
+
+        gsap.to(el, {
+          y: -6,
+          scale: 1.015,
+          duration: 0.22,
+          ease: "power2.out",
+          overwrite: true,
+          onComplete: () => {
+            isAnimating = false;
+          },
+        });
       });
+
+      el.addEventListener("mouseleave", () => {
+        gsap.to(el, {
+          y: 0,
+          scale: 1,
+          duration: 0.22,
+          ease: "power2.out",
+          overwrite: true,
+        });
+      });
+    });
+  }
+
+  // ------------ ACHIEVEMENT TOASTS + RANK UP OVERLAY ------------
+  const achievementToasts = document.querySelectorAll("[data-achievement-toast]");
+  achievementToasts.forEach((toast, index) => {
+    const showDelay = 180 + (index * 220);
+    const hideDelay = 5200 + (index * 260);
+
+    window.setTimeout(() => {
+      toast.classList.add("is-visible");
+    }, showDelay);
+
+    const closeToast = () => {
+      if (!toast.isConnected) return;
+      toast.classList.remove("is-visible");
+      toast.classList.add("is-hiding");
+      window.setTimeout(() => {
+        if (toast.isConnected) toast.remove();
+      }, 360);
+    };
+
+    const closeBtn = toast.querySelector("[data-achievement-close]");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", closeToast);
     }
+
+    window.setTimeout(closeToast, hideDelay);
+  });
+
+  const rankOverlay = document.querySelector("[data-rankup-overlay]");
+  if (rankOverlay) {
+    const closeRankOverlay = () => {
+      if (!rankOverlay.isConnected) return;
+      rankOverlay.classList.remove("is-visible");
+      rankOverlay.classList.add("is-hiding");
+      window.setTimeout(() => {
+        if (rankOverlay.isConnected) rankOverlay.remove();
+      }, 420);
+    };
+
+    window.setTimeout(() => {
+      rankOverlay.classList.add("is-visible");
+    }, 120);
+
+    rankOverlay.querySelectorAll("[data-rankup-close]").forEach((el) => {
+      el.addEventListener("click", closeRankOverlay);
+    });
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape" && document.body.contains(rankOverlay)) {
+        closeRankOverlay();
+        document.removeEventListener("keydown", onKeyDown);
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
   }
 });

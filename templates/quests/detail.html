@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="mb-3">
-  <a href="{{ url_for('listar_quests') }}" class="btn btn-link ps-0">&larr; Volver a retos</a>
-</div>
+<div class="pb-5">
+  <div class="mb-3">
+    <a href="{{ url_for('listar_quests') }}" class="btn btn-link ps-0">&larr; Volver a retos</a>
+  </div>
 
 {# Mapeos legibles para estatus / dificultad / tipo #}
 {% set estatus_map = {
@@ -50,10 +51,18 @@
           </span>
           ahorrados.
         </p>
+        <p class="text-muted small mb-1">
+          Puntos base QuestCash por completar este reto:
+          <span class="fw-semibold">{{ questy_result.puntos_base if questy_result else (quest.puntos_recompensa or 0) }}</span> pts
+        </p>
+        {% if questy_result %}
         <p class="text-muted small mb-0">
-          Puntos QuestCash por completar este reto:
+          Ajuste contextual de Questy:
+          <span class="fw-semibold">x{{ "%.2f"|format(questy_result.multiplicador_contextual) }}</span>
+          &middot; Puntos finales oficiales:
           <span class="fw-semibold">{{ quest.puntos_recompensa or 0 }}</span> pts
         </p>
+        {% endif %}
       </div>
     </div>
 
@@ -126,7 +135,136 @@
       </div>
     </div>
 
-    <div class="qc-card p-4">
+    {% if questy_result %}
+    <div class="qc-card p-4 mb-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+        <div>
+          <p class="text-muted mb-1">Questy · Evaluación contextual</p>
+          <h2 class="h5 fw-bold mb-1">Lectura inteligente del reto</h2>
+          <p class="text-muted mb-0">
+            Questy ajusta la valoración del reto usando tu progreso actual y un benchmark de jóvenes similares en México.
+          </p>
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3 text-center">
+        <div class="col-md-4 col-12">
+          <div class="border rounded-4 p-3 h-100">
+            <p class="text-muted small mb-1">Dificultad contextual</p>
+            <p class="fw-semibold mb-0">{{ questy_result.dificultad_label|replace('_', ' ')|capitalize }}</p>
+          </div>
+        </div>
+        <div class="col-md-4 col-6">
+          <div class="border rounded-4 p-3 h-100">
+            <p class="text-muted small mb-1">Multiplicador</p>
+            <p class="fw-semibold mb-0">x{{ "%.2f"|format(questy_result.multiplicador_contextual) }}</p>
+          </div>
+        </div>
+        <div class="col-md-4 col-6">
+          <div class="border rounded-4 p-3 h-100">
+            <p class="text-muted small mb-1">Puntos finales</p>
+            <p class="fw-semibold mb-0">{{ quest.puntos_recompensa or 0 }} pts</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-md-4">
+          <div class="border rounded-4 p-3 h-100">
+            <p class="text-muted small mb-1">Puntos base</p>
+            <p class="fw-semibold mb-1">{{ questy_result.puntos_base }} pts</p>
+            <p class="text-muted small mb-0">Calculados con monto, plazo y colaboradores.</p>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="border rounded-4 p-3 h-100">
+            <p class="text-muted small mb-1">Ajuste de Questy</p>
+            <p class="fw-semibold mb-1">
+              {% set ajuste_pts = (quest.puntos_recompensa or 0) - (questy_result.puntos_base or 0) %}
+              {% if ajuste_pts >= 0 %}+{% endif %}{{ ajuste_pts }} pts
+            </p>
+            <p class="text-muted small mb-0">Impacto del análisis contextual sobre la recompensa.</p>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="border rounded-4 p-3 h-100">
+            <p class="text-muted small mb-1">Esfuerzo mensual estimado</p>
+            <p class="fw-semibold mb-1">${{ "{:,.2f}".format(questy_result.monthly_goal_effort) }} MXN</p>
+            <p class="text-muted small mb-0">Lo necesario para mantener el ritmo del reto.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="border rounded-4 p-3 questy-message-box">
+        <p class="text-muted small mb-2">Mensaje de Questy</p>
+        <p class="mb-0">{{ questy_result.questy_message }}</p>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Columna lateral: colaboradores -->
+  <div class="col-lg-4">
+    {% if questy_result %}
+    <div class="qc-card p-4 mb-4">
+      <h2 class="h6 fw-semibold mb-3">Resumen Questy</h2>
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="text-muted">Puntos base</span>
+        <span class="fw-semibold">{{ questy_result.puntos_base }} pts</span>
+      </div>
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="text-muted">Multiplicador</span>
+        <span class="fw-semibold">x{{ "%.2f"|format(questy_result.multiplicador_contextual) }}</span>
+      </div>
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="text-muted">Ajuste</span>
+        <span class="fw-semibold">
+          {% set ajuste_sidebar = (quest.puntos_recompensa or 0) - (questy_result.puntos_base or 0) %}
+          {% if ajuste_sidebar >= 0 %}+{% endif %}{{ ajuste_sidebar }} pts
+        </span>
+      </div>
+      <div class="d-flex justify-content-between align-items-center mb-0">
+        <span class="text-muted">Puntos finales</span>
+        <span class="fw-semibold">{{ quest.puntos_recompensa or 0 }} pts</span>
+      </div>
+    </div>
+    {% endif %}
+    <div class="qc-card p-4 mb-4">
+      <h2 class="h6 fw-semibold mb-3">Colaboradores</h2>
+
+      {% set num_colabs = participaciones|length - 1 %}
+      {% if quest.tipo != "colaborativo" %}
+        <p class="text-muted mb-0">Este es un reto individual.</p>
+      {% elif num_colabs <= 0 %}
+        <p class="text-muted mb-0">Sin colaboradores adicionales por el momento.</p>
+      {% else %}
+        <ul class="list-unstyled mb-0">
+          {% for p in participaciones %}
+            {% if p.usuario_id != quest.usuario_id %}
+              <li class="mb-1">
+                {{ p.usuario.nombre }}
+                <span class="text-muted small">({{ p.rol|capitalize }})</span>
+              </li>
+            {% endif %}
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      {% if es_creador and quest.tipo == "colaborativo" %}
+        {% if quest.estatus != "cancelado" %}
+          <a href="{{ url_for('gestionar_colaboradores', quest_id=quest.id) }}"
+             class="btn btn-outline-primary btn-sm mt-3 w-100">
+            Gestionar colaboradores
+          </a>
+        {% else %}
+          <button class="btn btn-outline-primary btn-sm mt-3 w-100" disabled>
+            Gestionar colaboradores
+          </button>
+        {% endif %}
+      {% endif %}
+    </div>
+
+    <div class="qc-card p-4 mb-4">
       <h2 class="h6 fw-semibold mb-3">Acciones</h2>
       <div class="d-flex flex-wrap gap-2">
         {# Solo permitir nuevos movimientos si el reto no está cancelado #}
@@ -165,43 +303,6 @@
       </div>
     </div>
   </div>
-
-  <!-- Columna lateral: colaboradores -->
-  <div class="col-lg-4">
-    <div class="qc-card p-4">
-      <h2 class="h6 fw-semibold mb-3">Colaboradores</h2>
-
-      {% set num_colabs = participaciones|length - 1 %}
-      {% if quest.tipo != "colaborativo" %}
-        <p class="text-muted mb-0">Este es un reto individual.</p>
-      {% elif num_colabs <= 0 %}
-        <p class="text-muted mb-0">Sin colaboradores adicionales por el momento.</p>
-      {% else %}
-        <ul class="list-unstyled mb-0">
-          {% for p in participaciones %}
-            {% if p.usuario_id != quest.usuario_id %}
-              <li class="mb-1">
-                {{ p.usuario.nombre }}
-                <span class="text-muted small">({{ p.rol|capitalize }})</span>
-              </li>
-            {% endif %}
-          {% endfor %}
-        </ul>
-      {% endif %}
-
-      {% if es_creador and quest.tipo == "colaborativo" %}
-        {% if quest.estatus != "cancelado" %}
-          <a href="{{ url_for('gestionar_colaboradores', quest_id=quest.id) }}"
-             class="btn btn-outline-primary btn-sm mt-3 w-100">
-            Gestionar colaboradores
-          </a>
-        {% else %}
-          <button class="btn btn-outline-primary btn-sm mt-3 w-100" disabled>
-            Gestionar colaboradores
-          </button>
-        {% endif %}
-      {% endif %}
-    </div>
-  </div>
+</div>
 </div>
 {% endblock %}

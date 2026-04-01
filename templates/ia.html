@@ -1,582 +1,318 @@
 {% extends "base.html" %}
-
 {% block content %}
 <div class="container py-4 page-fade">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <div>
-      <h1 class="h4 mb-1">Questy, tu compañero de ahorro en QuestCash </h1>
-      <p class="text-muted mb-0">
-        Reviso tus retos de ahorro y te ayudo a tomar mejores decisiones con base en tu comportamiento real.
-      </p>
-      <p class="text-muted small mb-0 mt-1">
-        Todo lo que ves aquí está calculado a partir de tus movimientos registrados y el avance real de cada meta.
-      </p>
-    </div>
-  </div>
-
-  <div class="row g-4">
-    <!-- Columna izquierda: resumen + recomendaciones -->
-    <div class="col-lg-5">
-      <!-- Resumen global -->
-      <div class="qc-card ia-summary-card mb-3">
-        <div class="d-flex justify-content-between align-items-center mb-2">
-          <h2 class="h6 mb-0">Así veo tus retos</h2>
-          <span class="badge bg-light text-muted">Questy analizando</span>
-        </div>
-
-        <div class="row g-2 ia-summary-metrics">
-          <div class="col-6">
-            <div class="qc-pill ia-pill-total">
-              <span class="label">Total de retos</span>
-              <span class="value">{{ resumen.total_quests }}</span>
-            </div>
-          </div>
-          <div class="col-6">
-            <div class="qc-pill ia-pill-activos">
-              <span class="label">Activos</span>
-              <span class="value">{{ resumen.activos }}</span>
-            </div>
-          </div>
-          <div class="col-6">
-            <div class="qc-pill ia-pill-completados">
-              <span class="label">Completados</span>
-              <span class="value">{{ resumen.completados }}</span>
-            </div>
-          </div>
-          <div class="col-6">
-            <div class="qc-pill ia-pill-cancelados">
-              <span class="label">Cancelados</span>
-              <span class="value">{{ resumen.cancelados }}</span>
-            </div>
-          </div>
+  <section class="qc-card ia-main-chat-card">
+    <div class="row g-3 align-items-center">
+      <div class="col-lg-4">
+        <div class="ia-main-questy-wrap text-center">
+          <img
+            src="{{ url_for('static', filename='img/questy/Questy.png') }}"
+            alt="Questy"
+            class="img-fluid ia-questy-img ia-questy-img-large"
+          >
         </div>
       </div>
 
-      <!-- Resumen de gastos del mes -->
-      <div class="qc-card ia-spend-card mb-3">
-        <div class="d-flex justify-content-between align-items-center mb-2">
-          <h2 class="h6 mb-0">Cómo vas con tus gastos este mes</h2>
-          <span class="badge bg-light text-muted">Módulo de gastos</span>
-        </div>
-
-        {% if gastos_resumen.total_mes > 0 %}
-          <div class="mb-2">
-            <div class="d-flex justify-content-between align-items-center">
-              <span class="text-muted small">Total gastado</span>
-              <span class="fw-semibold">
-                ${{ "%.2f"|format(gastos_resumen.total_mes) }} MXN
-              </span>
-            </div>
-          </div>
-
-          {% if gastos_resumen.categoria_top %}
-            <div class="mb-2 small">
-              <span class="text-muted">Categoría principal:&nbsp;</span>
-              <span class="badge rounded-pill bg-primary-subtle text-primary">
-                {{ gastos_resumen.categoria_top }} ·
-                ${{ "%.0f"|format(gastos_resumen.categoria_top_monto) }}
-              </span>
-            </div>
-          {% endif %}
-
-          {% if gastos_resumen.hormiga_count > 0 %}
-            <div class="mb-2 small">
-              <span class="text-muted">Gastos hormiga detectados:&nbsp;</span>
-              <span class="badge rounded-pill bg-warning-subtle text-warning">
-                {{ gastos_resumen.hormiga_count }} movimientos ·
-                ${{ "%.0f"|format(gastos_resumen.total_hormiga) }} MXN
-              </span>
-            </div>
-          {% else %}
-            <p class="small text-muted mb-0">
-              No he detectado gastos hormiga este mes. ¡Buen control! ✨
+      <div class="col-lg-8">
+        <div class="ia-main-chat-panel">
+          <div class="ia-main-chat-head mb-3">
+            <span class="ia-chat-role">Questy</span>
+            <h1 class="h4 mb-1">Hola, soy Questy 👋</h1>
+            <p class="text-muted mb-3">
+              Aquí quiero hablar contigo de forma más clara y cercana sobre tus metas y tu progreso.
             </p>
-          {% endif %}
-        {% else %}
-          <p class="small text-muted mb-0">
-            Aún no tengo registros en tu módulo de gastos este mes.
-            Empieza a registrar tus gastos para que Questy pueda analizar tu comportamiento y darte consejos más precisos.
-          </p>
-        {% endif %}
-      </div>
 
-      <!-- Tabs superiores para navegar entre secciones de Questy -->
-      <div class="d-flex flex-wrap gap-2 mb-2 ia-left-tabs">
-        <button
-          type="button"
-          class="btn btn-sm btn-outline-primary active"
-          data-ia-tab="0"
-          data-bs-target="#iaLeftCarousel"
-          data-bs-slide-to="0"
-        >
-          Recomendaciones
-        </button>
-        <button
-          type="button"
-          class="btn btn-sm btn-outline-primary"
-          data-ia-tab="1"
-          data-bs-target="#iaLeftCarousel"
-          data-bs-slide-to="1"
-        >
-          Simulador
-        </button>
-        <button
-          type="button"
-          class="btn btn-sm btn-outline-primary"
-          data-ia-tab="2"
-          data-bs-target="#iaLeftCarousel"
-          data-bs-slide-to="2"
-        >
-          Plan maestro
-        </button>
-      </div>
+            <div class="ia-mode-switch mb-3" role="tablist" aria-label="Modo de conversación de Questy">
+              <button type="button" class="btn btn-sm ia-mode-chip active" data-ia-mode="resumen" onclick="setQuestyMode('resumen')">Resumen</button>
+              <button type="button" class="btn btn-sm ia-mode-chip" data-ia-mode="alertas" onclick="setQuestyMode('alertas')">Alertas</button>
+              <button type="button" class="btn btn-sm ia-mode-chip" data-ia-mode="consejos" onclick="setQuestyMode('consejos')">Consejos</button>
+              <button type="button" class="btn btn-sm ia-mode-chip" data-ia-mode="metas" onclick="setQuestyMode('metas')">Metas</button>
+            </div>
 
-      <!-- Carrusel con Recomendaciones / Simulador / Plan maestro -->
-      <div
-        id="iaLeftCarousel"
-        class="carousel slide ia-left-carousel mt-3"
-        data-bs-ride="false"
-      >
-        <!-- Indicadores (ocultos, usamos las tabs superiores) -->
-        <div class="carousel-indicators d-none">
-          <button
-            type="button"
-            data-bs-target="#iaLeftCarousel"
-            data-bs-slide-to="0"
-            class="active"
-            aria-current="true"
-            aria-label="Recomendaciones"
-          ></button>
-          <button
-            type="button"
-            data-bs-target="#iaLeftCarousel"
-            data-bs-slide-to="1"
-            aria-label="Simulador"
-          ></button>
-          <button
-            type="button"
-            data-bs-target="#iaLeftCarousel"
-            data-bs-slide-to="2"
-            aria-label="Plan maestro"
-          ></button>
-        </div>
+            <div class="ia-quick-questions mb-3">
+              <button type="button" class="btn btn-sm ia-question-chip active" data-ia-question="hoy" onclick="setQuestyQuestion('hoy')">¿Cómo voy hoy?</button>
+              <button type="button" class="btn btn-sm ia-question-chip" data-ia-question="urge" onclick="setQuestyQuestion('urge')">¿Qué meta urge más?</button>
+              <button type="button" class="btn btn-sm ia-question-chip" data-ia-question="ahora" onclick="setQuestyQuestion('ahora')">¿Qué debería hacer ahora?</button>
+              <button type="button" class="btn btn-sm ia-question-chip" data-ia-question="metas" onclick="setQuestyQuestion('metas')">Muéstrame mis metas</button>
+            </div>
 
-        <div class="carousel-inner">
-          <!-- Slide 1: Recomendaciones -->
-          <div class="carousel-item active">
-            <div class="qc-card ia-reco-card">
-              <h2 class="h6 mb-2">Lo que Questy te sugiere hoy</h2>
+            <div class="ia-quick-answer-card mb-3">
+              <div class="ia-quick-answer active" data-ia-answer="hoy">
+                <span class="ia-quick-answer-label">Respuesta rápida de Questy</span>
+                <p class="mb-2">{{ questy_home.respuesta_rapida }}</p>
+                {% if questy_home.porcentaje_ingreso_gastado > 0 %}
+                  <p class="text-muted small mb-2">
+                    Este mes tus gastos representan aproximadamente <strong>{{ "%.0f"|format(questy_home.porcentaje_ingreso_gastado) }}%</strong>
+                    de tu ingreso estimado.
+                  </p>
+                {% endif %}
+                <div class="ia-message-actions">
+                  <a href="{{ url_for('listar_quests') }}" class="btn btn-sm btn-outline-primary">Ver mis metas</a>
+                </div>
+              </div>
 
-              {% if recomendaciones %}
-                <ul class="list-unstyled mb-0 ia-reco-list">
-                  {% for r in recomendaciones %}
-                    <li class="ia-reco-item ia-reco-{{ r.tipo|default('info') }}">
-                      <span class="ia-reco-dot"></span>
-                      <span class="ia-reco-text">{{ r.texto }}</span>
-                    </li>
-                  {% endfor %}
-                </ul>
-              {% else %}
-                <p class="text-muted small mb-0">
-                  Aún no tengo recomendaciones especiales para ti. Sigue registrando movimientos y creando retos
-                  para que pueda conocerte mejor y ofrecerte sugerencias más precisas.
+              <div class="ia-quick-answer" data-ia-answer="urge">
+                <span class="ia-quick-answer-label">Respuesta rápida de Questy</span>
+                <p class="mb-2">
+                  {{ questy_home.alerta_texto or "Hoy no detecté una alerta fuerte en tus metas activas." }}
                 </p>
-              {% endif %}
-            </div>
-          </div>
-
-          <!-- Slide 2: Simulador -->
-          <div class="carousel-item">
-            <div class="qc-card ia-simulator-card">
-              <h2 class="h6 mb-2">Simulador “¿Qué pasaría si...?”</h2>
-              <p class="text-muted small mb-3">
-                Probemos juntos distintos escenarios cambiando cuánto ahorras y con qué frecuencia, sin tocar tus datos reales.
-              </p>
-
-              <form method="POST" class="row g-3">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-                <div class="col-12">
-                  <label class="form-label small fw-semibold">Meta a simular</label>
-                  <select
-                    name="sim_quest_id"
-                    class="form-select form-select-sm"
-                    {% if not analisis %}disabled{% endif %}
-                  >
-                    {% if analisis %}
-                      <option value="">Selecciona una meta</option>
-                      {% for item in analisis %}
-                        {% set q = item.quest %}
-                        <option value="{{ q.id }}">
-                          {{ q.nombre }} ({{ q.progreso_porcentaje() }}% completado)
-                        </option>
-                      {% endfor %}
-                    {% else %}
-                      <option value="">Primero crea una meta para poder simular</option>
-                    {% endif %}
-                  </select>
-                </div>
-
-                <div class="col-6">
-                  <label class="form-label small fw-semibold">Monto extra</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    class="form-control form-control-sm"
-                    name="sim_monto_extra"
-                    placeholder="Ej. 500"
-                  >
-                </div>
-
-                <div class="col-6">
-                  <label class="form-label small fw-semibold">Frecuencia</label>
-                  <select
-                    name="sim_frecuencia"
-                    class="form-select form-select-sm"
-                  >
-                    <option value="diario">Diario</option>
-                    <option value="semanal">Semanal</option>
-                    <option value="quincenal">Quincenal</option>
-                    <option value="mensual">Mensual</option>
-                  </select>
-                </div>
-
-                <div class="col-12 text-end">
-                  <button type="submit" class="btn btn-primary btn-sm">
-                    Calcular escenario
-                  </button>
-                </div>
-              </form>
-
-              {% if resultado_simulador %}
-                {% set sim = resultado_simulador %}
-                <hr class="my-3">
-                <div class="small">
-                  <p class="mb-1">
-                    Para <strong>{{ sim.quest.nombre }}</strong>, si aportas
-                    <strong>${{ "%.2f"|format(sim.monto_extra) }}</strong>
-                    de forma <strong>{{ sim.frecuencia }}</strong>, ahorrarías aproximadamente
-                    <strong>${{ "%.2f"|format(sim.aportes_proyectados) }}</strong> extra
-                    en los próximos {{ sim.dias_restantes }} días.
+                {% if questy_home.meta_prioritaria %}
+                  <p class="text-muted small mb-2">
+                    Meta prioritaria detectada: <strong>{{ questy_home.meta_prioritaria.nombre }}</strong>
                   </p>
-                  <p class="mb-1">
-                    Llegarías a <strong>${{ "%.2f"|format(sim.total_proyectado) }}</strong>
-                    de {{ "%.2f"|format(sim.quest.monto_objetivo) }} MXN.
-                  </p>
+                {% endif %}
+                <div class="ia-message-actions">
+                  <a href="{{ url_for('listar_quests') }}" class="btn btn-sm btn-outline-primary">Revisar metas</a>
+                </div>
+              </div>
 
-                  {% if sim.alcanza_meta %}
-                    <p class="text-success mb-1">
-                      ✅ Con este escenario sí alcanzas tu meta a tiempo.
-                    </p>
+              <div class="ia-quick-answer" data-ia-answer="ahora">
+                <span class="ia-quick-answer-label">Respuesta rápida de Questy</span>
+                <p class="mb-2">{{ questy_home.accion_texto }}</p>
+                {% if questy_home.margen_redirigible > 0 %}
+                  <p class="text-muted small mb-2">
+                    Questy estima un margen redirigible aproximado de <strong>${{ "%.2f"|format(questy_home.margen_redirigible) }} MXN</strong>.
+                  </p>
+                {% endif %}
+                <div class="ia-message-actions">
+                  <a href="{{ url_for('crear_quest') }}" class="btn btn-sm btn-primary">Crear nueva meta</a>
+                  <a href="{{ url_for('listar_quests') }}" class="btn btn-sm btn-outline-primary">Ver metas</a>
+                </div>
+              </div>
+
+              <div class="ia-quick-answer" data-ia-answer="metas">
+                <span class="ia-quick-answer-label">Respuesta rápida de Questy</span>
+                <p class="mb-2">
+                  {% if questy_home.metas_resumen %}
+                    Ya preparé una lectura inicial de tus metas activas para decirte cuáles tienen mejor valor contextual y cuáles merecen más atención.
                   {% else %}
-                    <p class="text-warning mb-1">
-                      ⚠️ Con este escenario aún te faltarían aproximadamente
-                      <strong>${{ "%.2f"|format(sim.faltante) }}</strong> MXN.
-                    </p>
+                    Aún no tengo metas activas suficientes para mostrarte una lectura inteligente detallada.
                   {% endif %}
-
-                  <p class="text-muted small mb-0">
-                    Probabilidad estimada actual: {{ sim.prob_actual }}% ({{ sim.nivel_actual }})
-                    • Con este escenario: {{ sim.prob_escenario }}% ({{ sim.nivel_escenario }}).
-                  </p>
+                </p>
+                <div class="ia-message-actions">
+                  <a href="{{ url_for('listar_quests') }}" class="btn btn-sm btn-outline-primary">Ir a mis metas</a>
+                  <a href="{{ url_for('crear_quest') }}" class="btn btn-sm btn-primary">Nueva meta</a>
                 </div>
-              {% endif %}
+              </div>
             </div>
           </div>
 
-          <!-- Slide 3: Plan maestro -->
-          <div class="carousel-item">
-            <div class="qc-card ia-plan-card">
-              <div class="d-flex justify-content-between align-items-center">
-                <div>
-                  <h2 class="h6 mb-1">Plan maestro con Questy</h2>
-                  <p class="text-muted small mb-0">
-                    Cuéntale a Questy un poco más sobre tus ingresos y gastos y generará un plan de ahorro adaptado a ti.
-                  </p>
+          <div class="ia-mode-panels">
+            <div class="ia-mode-panel active" data-ia-panel="resumen">
+              <div class="ia-questy-conversation ia-questy-conversation-main">
+                <div class="ia-questy-message ia-questy-message-bot">
+                  <div class="ia-questy-avatar">Q</div>
+                  <div class="ia-questy-message-body">
+                    <span class="ia-questy-name">Questy</span>
+                    <p class="mb-2">
+                      Ya revisé tus metas y tus movimientos más recientes. Quiero que esta sección se sienta como una conversación contigo, no como otro panel lleno de cuadros.
+                    </p>
+                    <div class="ia-message-actions">
+                      <a href="{{ url_for('listar_quests') }}" class="btn btn-sm btn-outline-primary">Ver mis metas</a>
+                    </div>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  class="btn btn-outline-primary btn-sm ms-2"
-                  data-bs-toggle="modal"
-                  data-bs-target="#planMaestroModal"
-                >
-                  Iniciar
-                </button>
+
+                <div class="ia-questy-message ia-questy-message-bot">
+                  <div class="ia-questy-avatar">Q</div>
+                  <div class="ia-questy-message-body">
+                    <span class="ia-questy-name">Questy</span>
+                    <p class="mb-2">{{ questy_home.respuesta_rapida }}</p>
+                    {% if questy_home.consejo_texto %}
+                      <p class="mb-2">{{ questy_home.consejo_texto }}</p>
+                    {% endif %}
+                    {% if questy_home.margen_redirigible > 0 %}
+                      <p class="text-muted small mb-2">
+                        Margen redirigible estimado por Questy: <strong>${{ "%.2f"|format(questy_home.margen_redirigible) }} MXN</strong>.
+                      </p>
+                    {% endif %}
+                    {% if questy_home.tendencia_gasto %}
+                      <p class="text-muted small mb-2">
+                        Tendencia de gasto actual: <strong>{{ questy_home.tendencia_gasto|capitalize }}</strong>
+                        {% if questy_home.variacion_vs_mes_anterior is not none %}
+                          ({{ "%+.0f"|format(questy_home.variacion_vs_mes_anterior) }}% vs mes anterior)
+                        {% endif %}
+                      </p>
+                    {% endif %}
+                    <div class="ia-message-actions">
+                      <a href="{{ url_for('crear_quest') }}" class="btn btn-sm btn-primary">Crear nueva meta</a>
+                    </div>
+                  </div>
+                </div>
+
+                {% if recomendaciones %}
+                  {% for r in recomendaciones[:1] %}
+                    <div class="ia-questy-message ia-questy-message-bot">
+                      <div class="ia-questy-avatar">Q</div>
+                      <div class="ia-questy-message-body">
+                        <span class="ia-questy-name">Questy</span>
+                        <p class="mb-2">{{ r.texto }}</p>
+                        <div class="ia-message-actions">
+                          <a href="{{ url_for('listar_quests') }}" class="btn btn-sm btn-outline-primary">Abrir metas</a>
+                        </div>
+                      </div>
+                    </div>
+                  {% endfor %}
+                {% endif %}
+              </div>
+            </div>
+
+            <div class="ia-mode-panel" data-ia-panel="alertas">
+              <div class="ia-questy-conversation ia-questy-conversation-main">
+                <div class="ia-questy-message ia-questy-message-bot">
+                  <div class="ia-questy-avatar">Q</div>
+                  <div class="ia-questy-message-body">
+                    <span class="ia-questy-name">Questy · alerta</span>
+                    <p class="mb-2">
+                      {{ questy_home.alerta_texto or "Hoy no detecté alertas importantes en tus metas activas." }}
+                    </p>
+                    <div class="ia-message-actions">
+                      <a href="{{ url_for('listar_quests') }}" class="btn btn-sm btn-outline-primary">Revisar metas</a>
+                    </div>
+                  </div>
+                </div>
+
+                {% if questy_home.meta_prioritaria %}
+                <div class="ia-questy-message ia-questy-message-bot">
+                  <div class="ia-questy-avatar">Q</div>
+                  <div class="ia-questy-message-body">
+                    <span class="ia-questy-name">Questy · foco</span>
+                    <p class="mb-0">
+                      Mi prioridad recomendada ahora mismo es <strong>{{ questy_home.meta_prioritaria.nombre }}</strong>.
+                    </p>
+                  </div>
+                </div>
+                {% endif %}
+              </div>
+            </div>
+
+            <div class="ia-mode-panel" data-ia-panel="consejos">
+              <div class="ia-questy-conversation ia-questy-conversation-main">
+                <div class="ia-questy-message ia-questy-message-bot">
+                  <div class="ia-questy-avatar">Q</div>
+                  <div class="ia-questy-message-body">
+                    <span class="ia-questy-name">Questy · consejo</span>
+                    <p class="mb-2">{{ questy_home.consejo_texto }}</p>
+                    {% if questy_home.margen_redirigible > 0 %}
+                      <p class="text-muted small mb-2">
+                        Con tu patrón actual, Questy estima que podrías redirigir aproximadamente
+                        <strong>${{ "%.2f"|format(questy_home.margen_redirigible) }} MXN</strong>.
+                      </p>
+                    {% endif %}
+                    <div class="ia-message-actions">
+                      <a href="{{ url_for('listar_quests') }}" class="btn btn-sm btn-outline-primary">Elegir meta principal</a>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="ia-questy-message ia-questy-message-bot">
+                  <div class="ia-questy-avatar">Q</div>
+                  <div class="ia-questy-message-body">
+                    <span class="ia-questy-name">Questy · siguiente movimiento</span>
+                    <p class="mb-0">{{ questy_home.accion_texto }}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="ia-mode-panel" data-ia-panel="metas">
+              <div class="ia-questy-conversation ia-questy-conversation-main">
+                {% if questy_home.metas_resumen %}
+                  {% for meta in questy_home.metas_resumen %}
+                    <div class="ia-questy-message ia-questy-message-bot">
+                      <div class="ia-questy-avatar">Q</div>
+                      <div class="ia-questy-message-body">
+                        <span class="ia-questy-name">Questy · {{ meta.nombre }}</span>
+                        <p class="mb-2">
+                          Esta meta tiene dificultad <strong>{{ meta.dificultad|replace('_', ' ')|capitalize }}</strong>,
+                          un valor contextual de <strong>{{ meta.puntos_finales }} pts</strong>
+                          y se compara con el perfil <strong>{{ meta.segmento_legible }}</strong>.
+                        </p>
+                        {% if meta.mensaje %}
+                          <p class="mb-2">{{ meta.mensaje }}</p>
+                        {% endif %}
+                        {% if meta.lectura_gasto %}
+                          <p class="text-muted small mb-2">{{ meta.lectura_gasto }}</p>
+                        {% endif %}
+                        {% if meta.esfuerzo_mensual > 0 %}
+                          <p class="text-muted small mb-2">
+                            Esfuerzo mensual estimado: <strong>${{ "%.2f"|format(meta.esfuerzo_mensual) }} MXN</strong>
+                          </p>
+                        {% endif %}
+                        <div class="ia-message-actions">
+                          <a href="{{ url_for('detalle_quest', quest_id=meta.id) }}" class="btn btn-sm btn-outline-primary">Ver detalle</a>
+                        </div>
+                      </div>
+                    </div>
+                  {% endfor %}
+                {% else %}
+                  <div class="ia-questy-message ia-questy-message-bot">
+                    <div class="ia-questy-avatar">Q</div>
+                    <div class="ia-questy-message-body">
+                      <span class="ia-questy-name">Questy · metas</span>
+                      <p class="mb-0">Aún no tengo metas activas suficientes para generar una lectura contextual detallada.</p>
+                    </div>
+                  </div>
+                {% endif %}
               </div>
             </div>
           </div>
         </div>
-
       </div>
     </div>
+  </section>
 
-    <!-- Columna derecha: análisis por quest -->
-    <div class="col-lg-7">
-      <div class="qc-card ia-quests-card">
-        <div class="d-flex justify-content-between align-items-center mb-2">
-          <h2 class="h6 mb-0">Cómo van tus retos</h2>
-          <span class="text-muted small">Así comparo tu ritmo real vs el necesario</span>
-        </div>
-
-        {% if analisis %}
-          <div class="ia-quest-list">
-            {% for item in analisis %}
-              {% set q = item.quest %}
-              <div
-                class="ia-quest-row"
-                role="button"
-                onclick="window.location='{{ url_for('detalle_quest', quest_id=q.id) }}'"
-              >
-                <div class="ia-quest-header">
-                  <div>
-                    <div class="d-flex align-items-center gap-2">
-                      <span class="ia-dot-status ia-status-{{ q.estatus }}"></span>
-                      <strong>{{ q.nombre }}</strong>
-                    </div>
-                    <div class="text-muted small">
-                      Vence el {{ q.fecha_limite.strftime("%d/%m/%Y") }} •
-                      Falta {{ item.faltante|round(0) | int }} MXN
-                    </div>
-                  </div>
-
-                  <div class="text-end">
-                    <span
-                      class="ia-prob-chip ia-prob-{{ item.probabilidad_nivel }}"
-                    >
-                      Prob. {{ item.probabilidad_nivel|capitalize }}
-                      ({{ item.probabilidad_num }}%)
-                    </span>
-                    <div class="text-muted small">
-                      {{ item.dias_restantes }} días restantes
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Barras de ritmo -->
-                <div class="ia-bars">
-                  <div class="ia-bar-label small text-muted mb-1">
-                    Ritmo de ahorro diario (real vs necesario)
-                  </div>
-
-                  <div class="ia-bar-track">
-                    <div
-                      class="ia-bar-real"
-                      style="width: {{ (item.ritmo_real / (item.ritmo_necesario or 1) * 100) | round(0) }}%;"
-                    ></div>
-                    <div class="ia-bar-target"></div>
-                  </div>
-
-                  <div class="d-flex justify-content-between small text-muted mt-1">
-                    <span>Real: {{ item.ritmo_real|round(2) }} MXN/día</span>
-                    <span>Necesario: {{ item.ritmo_necesario|round(2) }} MXN/día</span>
-                  </div>
-                </div>
-
-                <div class="ia-quest-footer text-muted small">
-                  <span>
-                    Progreso: {{ q.progreso_porcentaje() }}% •
-                    {{ item.dias_transcurridos }} de {{ item.dias_totales }} días
-                  </span>
-                </div>
-              </div>
-            {% endfor %}
-          </div>
-        {% else %}
-          <p class="text-muted mb-0">
-            Aún no tienes retos activos para analizar. Crea tu primera meta de ahorro para que
-            el asistente pueda darte recomendaciones personalizadas.
-          </p>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Modal: Plan maestro con Questy -->
-<div
-  class="modal fade"
-  id="planMaestroModal"
-  tabindex="-1"
-  aria-labelledby="planMaestroModalLabel"
-  aria-hidden="true"
->
-  <div class="modal-dialog modal-dialog-centered modal-lg">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title h6" id="planMaestroModalLabel">
-          Configurar tu plan maestro con Questy
-        </h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
-      </div>
-      <div class="modal-body">
-        <p class="text-muted small mb-3">
-          Esta información no modifica tus datos reales. Questy la utiliza para sugerirte cómo distribuir mejor tu ahorro entre tus metas.
-        </p>
-
-        <form method="POST" action="#">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-          <div class="row g-3">
-            <div class="col-md-6">
-              <label class="form-label small fw-semibold">Ingreso aproximado por periodo</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                class="form-control form-control-sm"
-                name="pm_ingreso"
-                placeholder="Ej. 8000"
-              >
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label small fw-semibold">Tipo de periodo</label>
-              <select
-                class="form-select form-select-sm"
-                name="pm_tipo_periodo"
-              >
-                <option value="mensual">Mensual</option>
-                <option value="quincenal">Quincenal</option>
-                <option value="semanal">Semanal</option>
-              </select>
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label small fw-semibold">Gastos fijos aproximados al mes</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                class="form-control form-control-sm"
-                name="pm_gastos_fijos"
-                placeholder="Ej. 3000"
-              >
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label small fw-semibold">Porcentaje que te gustaría ahorrar</label>
-              <input
-                type="number"
-                step="1"
-                min="1"
-                max="80"
-                class="form-control form-control-sm"
-                name="pm_porcentaje_ahorro"
-                placeholder="Ej. 20 (para 20%)"
-              >
-            </div>
-
-            <div class="col-12">
-              <label class="form-label small fw-semibold">Objetivo principal en este momento</label>
-              <select
-                class="form-select form-select-sm"
-                name="pm_objetivo_principal"
-              >
-                <option value="viajes">Viajes y experiencias</option>
-                <option value="estabilidad">Estabilidad y fondo de emergencia</option>
-                <option value="compras">Compras grandes (gadget, coche, etc.)</option>
-                <option value="independencia">Independencia (mudarte, renta, estudios)</option>
-              </select>
-            </div>
-
-            <div class="col-12">
-              <label class="form-label small fw-semibold">Estilo de plan</label>
-              <div class="d-flex flex-wrap gap-2">
-                <div class="form-check">
-                  <input
-                    class="form-check-input"
-                    type="radio"
-                    name="pm_estilo_plan"
-                    id="pm_estilo_relajado"
-                    value="relajado"
-                    checked
-                  >
-                  <label class="form-check-label small" for="pm_estilo_relajado">
-                    Relajado (prioriza comodidad)
-                  </label>
-                </div>
-                <div class="form-check">
-                  <input
-                    class="form-check-input"
-                    type="radio"
-                    name="pm_estilo_plan"
-                    id="pm_estilo_balanceado"
-                    value="balanceado"
-                  >
-                  <label class="form-check-label small" for="pm_estilo_balanceado">
-                    Balanceado (equilibrio entre metas)
-                  </label>
-                </div>
-                <div class="form-check">
-                  <input
-                    class="form-check-input"
-                    type="radio"
-                    name="pm_estilo_plan"
-                    id="pm_estilo_agresivo"
-                    value="agresivo"
-                  >
-                  <label class="form-check-label small" for="pm_estilo_agresivo">
-                    Agresivo (prioriza avanzar rápido)
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
-        <button type="submit" class="btn btn-primary btn-sm" form="">
-          Generar plan maestro
-        </button>
-      </div>
-    </div>
-  </div>
+  {#
+    BLOQUE RESERVADO PARA MOVER A ESTADISTICAS:
+    - simulador
+    - plan maestro
+    - análisis por quest
+    - comparativa de ritmo real vs necesario
+  #}
 </div>
 {% endblock %}
 
 {% block scripts_extra %}
 <script>
-  document.addEventListener('DOMContentLoaded', function () {
-    var iaCarousel = document.getElementById('iaLeftCarousel');
-    var tabButtons = document.querySelectorAll('.ia-left-tabs [data-ia-tab]');
+  window.setQuestyMode = function (mode) {
+    const modeButtons = document.querySelectorAll('[data-ia-mode]');
+    const panels = document.querySelectorAll('[data-ia-panel]');
 
-    if (!iaCarousel || !tabButtons.length) return;
-
-    // Usa la instancia existente de Bootstrap o crea una nueva
-    var carousel = (typeof bootstrap !== 'undefined' && bootstrap.Carousel)
-      ? bootstrap.Carousel.getOrCreateInstance(iaCarousel, { interval: false, ride: false })
-      : null;
-
-    function setActiveTab(index) {
-      tabButtons.forEach(function (btn, i) {
-        if (i === index) {
-          btn.classList.add('active');
-        } else {
-          btn.classList.remove('active');
-        }
-      });
-    }
-
-    // Click en tabs: movemos el carrusel y actualizamos el estado visual
-    tabButtons.forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var index = parseInt(btn.getAttribute('data-ia-tab'), 10) || 0;
-        if (carousel) {
-          carousel.to(index);
-        }
-        setActiveTab(index);
-      });
+    modeButtons.forEach((btn) => {
+      const isActive = btn.getAttribute('data-ia-mode') === mode;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
     });
 
-    // Cuando el carrusel se mueva por swipe/gesto, sincronizamos las tabs
-    if (iaCarousel && typeof bootstrap !== 'undefined' && bootstrap.Carousel) {
-      iaCarousel.addEventListener('slid.bs.carousel', function (event) {
-        var index = event.to || 0;
-        setActiveTab(index);
-      });
-    }
+    panels.forEach((panel) => {
+      const isActive = panel.getAttribute('data-ia-panel') === mode;
+      panel.classList.toggle('active', isActive);
+      panel.style.display = isActive ? 'block' : 'none';
+      panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+    });
+  };
+
+  window.setQuestyQuestion = function (question) {
+    const questionButtons = document.querySelectorAll('[data-ia-question]');
+    const answers = document.querySelectorAll('[data-ia-answer]');
+
+    questionButtons.forEach((btn) => {
+      const isActive = btn.getAttribute('data-ia-question') === question;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+
+    answers.forEach((answer) => {
+      const isActive = answer.getAttribute('data-ia-answer') === question;
+      answer.classList.toggle('active', isActive);
+      answer.style.display = isActive ? 'block' : 'none';
+      answer.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+    });
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+    window.setQuestyMode('resumen');
+    window.setQuestyQuestion('hoy');
   });
 </script>
 {% endblock %}

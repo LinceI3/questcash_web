@@ -1,110 +1,158 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="mb-3">
-  <h1 class="h4 fw-bold mb-1">Registrar movimiento</h1>
-  <p class="text-muted mb-0">Meta: <strong>{{ quest.nombre }}</strong></p>
-</div>
-
-<div class="qc-card p-4 mb-4">
-  {% if quest.estatus == "cancelado" %}
-    <div class="alert alert-warning mb-3">
-      Este reto está cancelado, no puedes registrar nuevos movimientos.
-    </div>
-    <div class="text-center">
-      <a href="{{ url_for('detalle_quest', quest_id=quest.id) }}" class="btn btn-primary">
-        Volver al detalle del reto
-      </a>
-    </div>
-  {% else %}
-    {% set porcentaje = quest.progreso_porcentaje() or 0 %}
-    <form method="post" class="needs-validation" novalidate>
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-      <!-- Resumen rápido del reto -->
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <div>
-          <p class="text-muted small mb-0">Reto seleccionado</p>
-          <p class="fw-semibold mb-0">{{ quest.nombre }}</p>
-        </div>
-        <div class="text-end">
-          <p class="text-muted small mb-1">Progreso actual</p>
-          <span class="badge bg-primary-subtle text-primary fw-semibold">
-            {{ porcentaje }}%
-          </span>
-        </div>
-      </div>
-
-      <!-- Tipo de movimiento como botones estilo pill -->
-      <div class="mb-3">
-        <label class="form-label fw-semibold d-block mb-2">Tipo de movimiento</label>
-        <div class="d-flex gap-2">
-          <div class="flex-fill">
-            <input type="radio" class="btn-check" name="tipo" id="tipo_aporte" value="aporte" required>
-            <label class="btn btn-outline-success w-100" for="tipo_aporte">
-              💸 Aporte (sumar)
-            </label>
-          </div>
-          <div class="flex-fill">
-            <input type="radio" class="btn-check" name="tipo" id="tipo_retiro" value="retiro" required>
-            <label class="btn btn-outline-danger w-100" for="tipo_retiro">
-              📤 Retiro (restar)
-            </label>
-          </div>
-        </div>
-        <div class="invalid-feedback d-block small mt-1">
-          Selecciona si este movimiento es un aporte o un retiro.
-        </div>
-      </div>
-
-      <!-- Monto con input-group -->
-      <div class="mb-3">
-        <label class="form-label fw-semibold">Monto</label>
-        <div class="input-group">
-          <span class="input-group-text">MXN</span>
-          <input
-            type="number"
-            name="monto"
-            step="0.01"
-            min="0.01"
-            max="1000000000"
-            class="form-control"
-            required
-            placeholder="Ej. 150.00"
-          >
-        </div>
-        <div class="invalid-feedback">
-          Ingresa un monto mayor a 0.
-        </div>
-        <p class="text-muted small mb-0 mt-1">
-          Tip: puedes usar este movimiento para registrar tu ahorro semanal, quincenal o un ingreso extra.
+<div class="movement-form-page page-fade">
+  <section class="qc-card movement-form-hero mb-4">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3">
+      <div>
+        <span class="movement-form-eyebrow">Movimiento</span>
+        <h1 class="h4 fw-bold mb-1">Registrar movimiento</h1>
+        <p class="text-muted mb-0">
+          Agrega un aporte o retiro para mantener actualizado el progreso de tu reto.
         </p>
       </div>
 
-      <!-- Nota opcional -->
-      <div class="mb-3">
-        <label class="form-label fw-semibold">Nota (opcional)</label>
-        <textarea
-          name="nota"
-          rows="3"
-          class="form-control"
-          maxlength="500"
-          placeholder="Ej. Aporte semanal, ingreso extra, ajuste por transferencia…"
-        ></textarea>
-        <p class="text-muted small mb-0 mt-1">
-          Esta nota solo la verás tú; úsala para recordar de dónde vino este movimiento.
-        </p>
-      </div>
-
-      <!-- Botones de acción -->
-      <button type="submit" class="btn btn-primary w-100 fw-semibold py-2 mb-2">
-        Guardar movimiento
-      </button>
-      <div class="text-center">
-        <a href="{{ url_for('detalle_quest', quest_id=quest.id) }}" class="btn btn-link">
-          Cancelar y volver al detalle del reto
+      <div class="d-flex flex-wrap gap-2 movement-form-hero-actions">
+        <a href="{{ url_for('detalle_quest', quest_id=quest.id) }}" class="btn btn-outline-secondary btn-sm">
+          Volver al reto
         </a>
       </div>
-    </form>
-  {% endif %}
+    </div>
+  </section>
+
+  <div class="qc-card movement-form-shell p-4 mb-4">
+    {% if quest.estatus == "cancelado" %}
+      <div class="alert alert-warning mb-3">
+        Este reto está cancelado, no puedes registrar nuevos movimientos.
+      </div>
+      <div class="text-center">
+        <a href="{{ url_for('detalle_quest', quest_id=quest.id) }}" class="btn btn-primary">
+          Volver al detalle del reto
+        </a>
+      </div>
+    {% else %}
+      {% set porcentaje = quest.progreso_porcentaje() or 0 %}
+      <form method="post" class="needs-validation movement-form-grid" novalidate>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+        <div class="row g-4 align-items-start">
+          <div class="col-lg-8">
+            <section class="qc-card movement-form-card movement-form-main-card p-4">
+              <div class="movement-form-section-head mb-3">
+                <h2 class="h5 fw-bold mb-1">Información del movimiento</h2>
+                <p class="text-muted small mb-0">
+                  Elige el tipo de movimiento, define el monto y agrega una nota si quieres dejar contexto.
+                </p>
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label fw-semibold d-block mb-2">Tipo de movimiento</label>
+                <div class="row g-3 movement-type-grid">
+                  <div class="col-md-6">
+                    <input type="radio" class="btn-check" name="tipo" id="tipo_aporte" value="aporte" required>
+                    <label class="btn btn-outline-success w-100 text-start movement-type-option" for="tipo_aporte">
+                      <span class="d-block fw-semibold mb-1">💸 Aporte</span>
+                      <span class="d-block small text-muted">Suma dinero al progreso de tu meta.</span>
+                    </label>
+                  </div>
+                  <div class="col-md-6">
+                    <input type="radio" class="btn-check" name="tipo" id="tipo_retiro" value="retiro" required>
+                    <label class="btn btn-outline-danger w-100 text-start movement-type-option" for="tipo_retiro">
+                      <span class="d-block fw-semibold mb-1">📤 Retiro</span>
+                      <span class="d-block small text-muted">Resta dinero del progreso actual.</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="invalid-feedback d-block invisible movement-form-feedback-spacer">
+                  Selecciona si este movimiento es un aporte o un retiro.
+                </div>
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label fw-semibold" for="monto">Monto</label>
+                <div class="input-group input-group-lg">
+                  <span class="input-group-text">MXN</span>
+                  <input
+                    type="number"
+                    id="monto"
+                    name="monto"
+                    step="0.01"
+                    min="0.01"
+                    max="1000000000"
+                    class="form-control"
+                    required
+                    placeholder="Ej. 150.00"
+                  >
+                </div>
+                <div class="invalid-feedback d-block invisible movement-form-feedback-spacer">
+                  Ingresa un monto mayor a 0.
+                </div>
+                <p class="text-muted small mb-0 mt-1">
+                  Úsalo para registrar tu ahorro semanal, quincenal o algún ajuste puntual.
+                </p>
+              </div>
+
+              <div class="mb-0">
+                <label class="form-label fw-semibold" for="nota">Nota</label>
+                <textarea
+                  id="nota"
+                  name="nota"
+                  rows="4"
+                  class="form-control"
+                  maxlength="500"
+                  placeholder="Ej. Aporte semanal, ingreso extra, ajuste por transferencia…"
+                ></textarea>
+                <p class="text-muted small mb-0 mt-2">
+                  Esta nota solo la verás tú; úsala para recordar de dónde vino este movimiento.
+                </p>
+              </div>
+            </section>
+          </div>
+
+          <div class="col-lg-4">
+            <section class="qc-card movement-form-card movement-form-side-card p-4">
+              <div class="movement-form-section-head mb-3">
+                <h2 class="h5 fw-bold mb-1">Resumen del reto</h2>
+                <p class="text-muted small mb-0">
+                  Este movimiento se registrará dentro del reto que tienes abierto.
+                </p>
+              </div>
+
+              <div class="movement-summary-stack">
+                <div class="movement-summary-item">
+                  <span class="movement-summary-label">Reto seleccionado</span>
+                  <strong class="movement-summary-value">{{ quest.nombre }}</strong>
+                </div>
+
+                <div class="movement-summary-item">
+                  <span class="movement-summary-label">Progreso actual</span>
+                  <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <span class="badge rounded-pill text-bg-light">{{ porcentaje }}%</span>
+                    <span class="text-muted small">antes de registrar este movimiento</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="movement-form-side-note mt-3">
+                <div class="small text-muted">
+                  Si registras un retiro, el avance de la meta disminuirá en función del monto capturado.
+                </div>
+              </div>
+
+              <hr class="my-4">
+
+              <div class="movement-form-actions d-grid gap-2">
+                <button type="submit" class="btn btn-primary fw-semibold btn-lg">
+                  Guardar movimiento
+                </button>
+                <a href="{{ url_for('detalle_quest', quest_id=quest.id) }}" class="btn btn-outline-secondary">
+                  Cancelar
+                </a>
+              </div>
+            </section>
+          </div>
+        </div>
+      </form>
+    {% endif %}
+  </div>
 </div>
 {% endblock %}

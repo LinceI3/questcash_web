@@ -2,120 +2,118 @@
 {% block content %}
 
 <!-- HEADER -->
-<div class="mb-4">
-  <h2 class="fw-bold mb-0">Hola, {{ g.usuario_actual.alias or g.usuario_actual.nombre }}</h2>
-  <p class="text-muted mb-0">Este es tu panel de progreso en QuestCash. Sigue sumando logros </p>
-</div>
-
-<!-- GLOBAL RING + STATS -->
-<div class="row mb-2 mb-lg-3 g-3 dashboard-summary-row">
-
-  <!-- PROGRESO GLOBAL (RING) -->
-    <div class="col-md-4">
-      <div class="qc-card h-100 text-center px-3 py-4 dashboard-ring-card">
-        <p class="text-muted small mb-2">Progreso global de tus metas</p>
-        <div class="ring-wrapper mx-auto mb-3">
-          <div class="ring"
-               style="--percent: {{ progreso_global }};">
-            <div class="ring-inner">
-              <strong class="fs-4">{{ progreso_global }}%</strong>
-            </div>
-          </div>
-        </div>
-
-        <p class="mb-0 text-muted small">
-          <span class="d-block fw-semibold mb-1">Ahorro acumulado</span>
-          ${{ "%.2f"|format(total_actual) }} / ${{ "%.2f"|format(total_objetivo) }}
-        </p>
-      </div>
+<div class="dashboard-header-compact mb-3">
+  <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 text-center text-lg-start">
+    <div>
+      <h2 class="fw-bold mb-1">Hola, {{ g.usuario_actual.alias or g.usuario_actual.nombre }}</h2>
+      <p class="text-muted mb-0">Este es tu panel de progreso en QuestCash. Sigue sumando logros.</p>
     </div>
 
-  <!-- MINI PILLS -->
-  <div class="col-md-8">
-    <div class="row g-3">
-
-      <div class="col-md-4 col-6">
-        <div class="qc-pill text-center py-3">
-          <div class="text-muted small">🎯 Metas activas</div>
-          <div class="fw-bold fs-5">{{ activos|length }}</div>
-        </div>
-      </div>
-
-      <div class="col-md-4 col-6">
-        <div class="qc-pill text-center py-3">
-          <div class="text-muted small">🏁 Metas completadas</div>
-          <div class="fw-bold fs-5">{{ completados|length }}</div>
-        </div>
-      </div>
-
-      <div class="col-md-4 col-6">
-        <div class="qc-pill text-center py-3">
-          <div class="text-muted small">💰 Ahorro total</div>
-          <div class="fw-bold fs-5">${{ "%.2f"|format(total_actual) }}</div>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- Tarjeta de puntos QuestCash -->
-    <div class="qc-card mt-3 d-flex align-items-center justify-content-between px-3 py-3 dashboard-points-card">
-      <div>
-        <div class="text-muted small mb-1">Puntos QuestCash</div>
-        <div class="fw-bold fs-4">{{ g.usuario_actual.puntos_totales }} pts</div>
-      </div>
-      <span class="badge bg-primary-subtle text-primary small">
-        Sigue ahorrando 💎
-      </span>
-    </div>
-
-    <!-- Tarjeta de racha de ahorro -->
-    <div class="qc-card mt-3 d-flex align-items-center justify-content-between px-3 py-3 dashboard-streak-card">
-      <div>
-        <div class="text-muted small mb-1">🔥 Racha de ahorro</div>
-        <div class="fw-bold">
-          {% if racha_actual and racha_actual > 0 %}
-            {{ racha_actual }} día{% if racha_actual != 1 %}s{% endif %} seguidos ahorrando
-          {% else %}
-            Aún no tienes una racha activa
-          {% endif %}
-        </div>
-        <div class="text-muted small mt-1">
-          Mejor racha: {{ mejor_racha or 0 }} día{% if (mejor_racha or 0) != 1 %}s{% endif %}
-        </div>
-      </div>
-      <span class="badge bg-success-subtle text-success small">
-        Mantén el ritmo ✨
-      </span>
+    <div class="d-flex flex-wrap justify-content-center justify-content-lg-end gap-2">
+      <a href="{{ url_for('crear_quest') }}" class="btn btn-primary">+ Nueva meta</a>
+      <a href="{{ url_for('listar_quests') }}" class="btn btn-outline-primary">Ver metas</a>
     </div>
   </div>
 </div>
 
-<!-- MAIN CONTENT -->
-<div class="row g-4 dashboard-main-row">
+<!-- HERO DASHBOARD / CONSOLE STYLE -->
+<div class="qc-card dashboard-console-hero dashboard-console-hero-compact p-3 p-xl-4 mb-3">
+  <div class="row g-3 align-items-center text-center text-lg-start">
 
-  <!-- TUS METAS -->
-  <div class="col-md-7">
-    <div class="qc-card h-100">
+    <!-- Ring principal -->
+    <div class="col-lg-3 text-center">
+      <p class="text-muted small mb-2">Progreso global de tus metas</p>
+      <div class="ring-wrapper mx-auto mb-3">
+        <div class="ring" style="--percent: {{ progreso_global }};">
+          <div class="ring-inner">
+            <strong class="fs-4">{{ progreso_global }}%</strong>
+          </div>
+        </div>
+      </div>
+
+      <p class="mb-0 text-muted small">
+        <span class="d-block fw-semibold mb-1">Ahorro acumulado</span>
+        ${{ "%.2f"|format(total_actual) }} / ${{ "%.2f"|format(total_objetivo) }}
+      </p>
+    </div>
+
+    <!-- Resumen principal -->
+    <div class="col-lg-5 d-flex flex-column justify-content-center">
+      <span class="badge bg-primary-subtle text-primary mb-2 dashboard-console-badge">Pantalla principal</span>
+      <h3 class="fw-bold mb-2">Tu ahorro sigue creciendo</h3>
+      <p class="text-muted mb-2 dashboard-console-copy">
+        Llevas ${{ "%.2f"|format(total_actual) }} ahorrados en QuestCash.
+        Sigue impulsando tus metas activas y mantén tu progreso constante para desbloquear más logros.
+      </p>
+    </div>
+
+    <!-- Stats rápidas estilo tile -->
+    <div class="col-lg-4">
+      <div class="dashboard-console-mini-grid dashboard-console-mini-grid-compact">
+        <div class="dashboard-mini-tile text-center">
+          <div class="text-muted small">🎯 Activas</div>
+          <div class="fw-bold fs-4">{{ activos|length }}</div>
+        </div>
+
+        <div class="dashboard-mini-tile text-center">
+          <div class="text-muted small">🏁 Completadas</div>
+          <div class="fw-bold fs-4">{{ completados|length }}</div>
+        </div>
+
+        <div class="dashboard-mini-tile text-center">
+          <div class="text-muted small">💰 Ahorro total</div>
+          <div class="fw-bold fs-5">${{ "%.2f"|format(total_actual) }}</div>
+        </div>
+
+        <div class="dashboard-mini-tile text-center">
+          <div class="text-muted small">🧭 Meta foco</div>
+          <div class="fw-bold small">
+            {% if questy_dashboard and questy_dashboard.meta_prioritaria %}
+              {{ questy_dashboard.meta_prioritaria.nombre }}
+            {% else %}
+              Sin foco
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- MAIN CONTENT / CONSOLE TILES -->
+<div class="dashboard-console-grid dashboard-console-grid-v2 dashboard-console-grid-compact">
+
+  <!-- Tile grande: tus metas -->
+  <section class="dashboard-console-tile tile-metas">
+    <div class="qc-card h-100 dashboard-console-card p-3 dashboard-console-card-compact">
       <div class="d-flex justify-content-between align-items-center mb-3">
         <h4 class="mb-0 fw-bold">Tus metas</h4>
-        <a href="{{ url_for('crear_quest') }}" class="btn btn-primary btn-sm">+ Nueva meta</a>
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge rounded-pill text-bg-light">{{ quests|length }} activas</span>
+          <a href="{{ url_for('listar_quests') }}" class="btn btn-sm btn-outline-primary">Ver todas</a>
+        </div>
       </div>
 
       {% if quests %}
-      <div class="row g-3">
-        {% for q in quests %}
-        <div class="col-md-6">
-          <div class="quest-card qc-hover-scale p-3 h-100">
-
-            <div class="d-flex justify-content-between align-items-start mb-1">
-              <h5 class="mb-1">{{ q.nombre }}</h5>
+      <div class="dashboard-quest-strip">
+        {% for q in quests[:4] %}
+          <div class="quest-card dashboard-quest-tile qc-hover-scale p-3 text-center text-md-start">
+            <div class="d-flex justify-content-between align-items-start mb-2 gap-2">
+              <div>
+                <h5 class="mb-1">{{ q.nombre }}</h5>
+                <div class="text-muted small">
+                  Fecha límite: {{ q.fecha_limite.strftime("%d/%m/%Y") }}
+                </div>
+              </div>
               <span class="badge bg-secondary">{{ q.progreso_porcentaje() }}%</span>
             </div>
 
-            <div class="ring-sm mb-1"
-                 style="--percent: {{ q.progreso_porcentaje() }};"></div>
+            <div class="quest-progress-bar mb-3"
+                 style="--progress: {{ q.progreso_porcentaje() / 100 }};"></div>
 
-            <p class="text-muted mb-1 small">
+            <p class="text-muted small mb-3">
               {% if q.estatus == "pendiente" %}
                 Estado: Pendiente
               {% elif q.estatus == "en_progreso" %}
@@ -129,48 +127,60 @@
               {% endif %}
             </p>
 
-            <p class="text-muted mb-1 small">
-              Fecha límite: {{ q.fecha_limite.strftime("%d/%m/%Y") }}
-            </p>
-
             <a href="{{ url_for('detalle_quest', quest_id=q.id) }}"
-               class="btn btn-outline-primary w-100 btn-sm mt-2">
-              Ver detalle
+               class="btn btn-outline-primary btn-sm w-100">
+              Abrir meta
             </a>
-
           </div>
-        </div>
         {% endfor %}
+        {% if quests|length > 4 %}
+          <div class="text-center mt-2">
+            <a href="{{ url_for('listar_quests') }}" class="btn btn-sm btn-outline-secondary">
+              Ver {{ quests|length - 4 }} metas más
+            </a>
+          </div>
+        {% endif %}
       </div>
       {% else %}
         <p class="text-muted mb-0">No tienes metas aún. Crea tu primer reto ✨</p>
       {% endif %}
     </div>
+  </section>
+
+  <!-- Columna derecha superior -->
+  <div class="dashboard-console-stack-top">
+
+    <!-- Tile: meta más próxima -->
+    <section class="dashboard-console-tile tile-proxima">
+      <div class="qc-card h-100 dashboard-console-card p-3 dashboard-console-card-compact text-center text-lg-start">
+        <h4 class="mb-1 fw-bold">Meta más próxima</h4>
+        <p class="text-muted small mb-3">La meta que está más cerca de cumplirse.</p>
+
+        {% if questy_dashboard and questy_dashboard.meta_prioritaria %}
+          <p class="mb-1 fw-semibold">{{ questy_dashboard.meta_prioritaria.nombre }}</p>
+          <div class="quest-progress-bar mb-3"
+               style="--progress: {{ questy_dashboard.meta_prioritaria.progreso_porcentaje() / 100 }};"></div>
+          <a href="{{ url_for('detalle_quest', quest_id=questy_dashboard.meta_prioritaria.id) }}"
+             class="btn btn-outline-primary btn-sm">Ver detalle</a>
+        {% elif quest_mas_cercano %}
+          <p class="mb-1 fw-semibold">{{ quest_mas_cercano.nombre }}</p>
+          <p class="mb-2 text-muted">Vence: {{ quest_mas_cercano.fecha_limite.strftime("%d/%m/%Y") }}</p>
+          <div class="quest-progress-bar mb-3"
+               style="--progress: {{ quest_mas_cercano.progreso_porcentaje() / 100 }};"></div>
+          <a href="{{ url_for('detalle_quest', quest_id=quest_mas_cercano.id) }}"
+             class="btn btn-outline-primary btn-sm">Ver detalle</a>
+        {% else %}
+          <p class="text-muted mb-0">No tienes metas registradas.</p>
+        {% endif %}
+      </div>
+    </section>
+
   </div>
 
-  <!-- PANEL DERECHO -->
-  <div class="col-md-5">
-
-    <!-- META MÁS PRÓXIMA -->
-    <div class="qc-card mb-3">
-      <h4 class="mb-1 fw-bold">Meta más próxima</h4>
-      <p class="text-muted small mb-2">La meta que está más cerca de cumplirse.</p>
-
-      {% if quest_mas_cercano %}
-        <p class="mb-1"><strong>{{ quest_mas_cercano.nombre }}</strong></p>
-        <p class="mb-1 text-muted">Vence: {{ quest_mas_cercano.fecha_limite.strftime("%d/%m/%Y") }}</p>
-        <div class="ring-sm mb-2"
-             style="--percent: {{ quest_mas_cercano.progreso_porcentaje() }};"></div>
-        <a href="{{ url_for('detalle_quest', quest_id=quest_mas_cercano.id) }}"
-           class="btn btn-outline-primary btn-sm mt-2">Ver detalle</a>
-      {% else %}
-        <p class="text-muted mb-0">No tienes metas registradas.</p>
-      {% endif %}
-    </div>
-
-    <!-- NOTIFICACIONES -->
-    <div class="qc-card mb-3">
-      <div class="d-flex justify-content-between align-items-center mb-2">
+  <!-- Fila inferior: actividad + movimientos -->
+  <section class="dashboard-console-tile tile-actividad">
+    <div class="qc-card h-100 dashboard-console-card p-3 dashboard-console-card-compact">
+      <div class="d-flex justify-content-between align-items-center mb-3">
         <h4 class="mb-0 fw-bold">Actividad reciente</h4>
         <a href="{{ url_for('ver_notificaciones') }}" class="btn btn-sm btn-outline-secondary">
           Ver todas
@@ -178,8 +188,8 @@
       </div>
 
       {% if notificaciones %}
-      <div class="notif-list">
-        {% for n in notificaciones[:3] %}
+      <div class="dashboard-activity-list">
+        {% for n in notificaciones[:2] %}
         <div class="notif-item alert alert-{{ n.tipo }} py-2 px-3 mb-2">
           {{ n.mensaje }}
         </div>
@@ -189,21 +199,22 @@
         <p class="text-muted mb-0">Sin notificaciones.</p>
       {% endif %}
     </div>
+  </section>
 
-    <!-- MOVIMIENTOS -->
-    <div class="qc-card">
-      <h4 class="mb-2 fw-bold">Movimientos recientes</h4>
+  <section class="dashboard-console-tile tile-movimientos">
+    <div class="qc-card h-100 dashboard-console-card p-3 dashboard-console-card-compact">
+      <h4 class="mb-3 fw-bold">Movimientos recientes</h4>
 
       {% if movimientos_recientes %}
-      <ul class="list-unstyled mb-0">
+      <ul class="list-unstyled mb-0 dashboard-movement-list">
         {% for m in movimientos_recientes %}
-        <li class="d-flex justify-content-between mb-3 movement-item">
+        <li class="d-flex justify-content-between align-items-center mb-3 movement-item gap-3 flex-wrap">
           <div>
             <div class="small text-muted">{{ m.fecha.strftime("%d/%m/%Y %H:%M") }}</div>
             <div class="fw-semibold">{{ m.quest.nombre }} — {{ m.tipo }}</div>
           </div>
 
-          <strong class="{% if m.tipo == 'aporte' %}text-success{% else %}text-danger{% endif %}">
+          <strong class="text-nowrap {% if m.tipo == 'aporte' %}text-success{% else %}text-danger{% endif %}">
             {% if m.tipo == 'aporte' %}
               +${{ "%.2f"|format(m.monto) }}
             {% else %}
@@ -217,8 +228,8 @@
         <p class="text-muted mb-0">No hay movimientos aún.</p>
       {% endif %}
     </div>
+  </section>
 
-  </div>
 </div>
 
 {% endblock %}

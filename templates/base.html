@@ -14,6 +14,9 @@
       crossorigin="anonymous"
     />
 
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+
     <!-- Custom CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/custom.css') }}">
   </head>
@@ -32,103 +35,142 @@
           QuestCash
         </a>
 
-        <!-- Mobile toggle -->
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
-                data-bs-target="#navbarNav" aria-controls="navbarNav"
-                aria-expanded="false" aria-label="Toggle navigation">
-          <span class="navbar-toggler-icon"></span>
-        </button>
+        {% if g.usuario_actual %}
 
-        <!-- Menu -->
-        <div class="collapse navbar-collapse" id="navbarNav">
-          <ul class="navbar-nav ms-auto align-items-lg-center">
+          <!-- Right actions (compact) -->
+          <div class="ms-auto d-flex align-items-center gap-2">
 
-            {% if g.usuario_actual %}
+            <!-- Streak pill -->
+            {% if racha_actual is defined %}
+              <div class="qc-streak-pill" title="Racha de ahorro">
+                <span class="qc-streak-emoji">🔥</span>
+                <span class="qc-streak-days">{{ racha_actual }}</span>
+              </div>
+            {% endif %}
 
-              <!-- User chip -->
-              <li class="nav-item me-lg-3 mb-2 mb-lg-0">
-                <div class="navbar-user d-flex align-items-center gap-2">
-                  <div class="navbar-avatar-wrapper">
-                    {% if g.usuario_actual.foto_perfil %}
-                      <img
-                        src="{{ url_for('static', filename='uploads/profiles/' ~ g.usuario_actual.foto_perfil) }}"
-                        alt="Avatar de {{ g.usuario_actual.alias or g.usuario_actual.nombre }}"
-                        class="navbar-avatar-img">
-                    {% else %}
-                      <div class="navbar-avatar-fallback">
-                        {{ (g.usuario_actual.alias or g.usuario_actual.nombre)[0]|upper }}
-                      </div>
-                    {% endif %}
-                  </div>
-                  <div class="d-flex flex-column lh-1">
-                    <span class="navbar-user-name">
-                      {{ g.usuario_actual.alias or g.usuario_actual.nombre }}
-                    </span>
-                    <span class="navbar-user-points">
-                      {{ g.usuario_actual.puntos_totales }} pts
-                    </span>
-                  </div>
+            <!-- Notificaciones (icon button) -->
+            <a class="btn qc-icon-btn {% if request.endpoint == 'ver_notificaciones' %}active{% endif %}"
+               href="{{ url_for('ver_notificaciones') }}"
+               aria-label="Notificaciones">
+              <i class="bi bi-bell"></i>
+            </a>
+
+            <!-- User dropdown (chip button) -->
+            <div class="dropdown">
+              <button
+                class="btn qc-user-chip qc-user-chip-rank dropdown-toggle d-flex align-items-center gap-2 position-relative"
+                type="button"
+                data-bs-toggle="dropdown"
+                aria-expanded="false"
+                {% if current_user_rank %}
+                style="--rank-color: {{ current_user_rank.current_color }}; --rank-accent: {{ current_user_rank.current_accent }}; --rank-progress: {{ current_user_rank.progress_percent }}%;"
+                {% endif %}
+              >
+                <div class="navbar-avatar-wrapper">
+                  {% if g.usuario_actual.foto_perfil %}
+                    <img
+                      src="{{ url_for('static', filename='uploads/profiles/' ~ g.usuario_actual.foto_perfil) }}"
+                      alt="Avatar de {{ g.usuario_actual.alias or g.usuario_actual.nombre }}"
+                      class="navbar-avatar-img">
+                  {% else %}
+                    <div class="navbar-avatar-fallback">
+                      {{ (g.usuario_actual.alias or g.usuario_actual.nombre or 'U')[:1]|upper }}
+                    </div>
+                  {% endif %}
                 </div>
-              </li>
 
-              <!-- Dashboard -->
-              <li class="nav-item">
-                <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}"
-                   href="{{ url_for('dashboard') }}">Dashboard</a>
-              </li>
+                <div class="d-none d-sm-flex flex-column lh-1 text-start">
+                  <span class="navbar-user-name">
+                    {{ g.usuario_actual.alias or g.usuario_actual.nombre }}
+                  </span>
+                  <span class="navbar-user-points">
+                    {{ g.usuario_actual.puntos_totales }} pts
+                    {% if current_user_rank %}
+                      · {{ current_user_rank.current_name }}
+                    {% endif %}
+                  </span>
+                </div>
+              </button>
 
-              <!-- Quests -->
-              <li class="nav-item">
-                <a class="nav-link {% if 'quest' in request.endpoint %}active{% endif %}"
-                   href="{{ url_for('listar_quests') }}">Retos</a>
-              </li>
+              <!-- Dropdown menu (pill style; CSS will handle the look) -->
+              <div class="dropdown-menu dropdown-menu-end qc-user-menu p-2" style="min-width: 320px;">
 
-              <!-- Insignias -->
-              <li class="nav-item">
-                <a class="nav-link {% if request.endpoint == 'mis_insignias' %}active{% endif %}"
-                   href="{{ url_for('mis_insignias') }}">Insignias</a>
-              </li>
+                <div class="qc-user-menu-header px-2 pb-2">
+                  <div class="fw-semibold">
+                    {{ g.usuario_actual.alias or g.usuario_actual.nombre }}
+                  </div>
+                  <div class="small opacity-75 mb-2">
+                    {{ g.usuario_actual.puntos_totales }} pts
+                  </div>
+                  
+                  {% if current_user_rank %}
+                    <div class="small fw-semibold mb-1" {% if current_user_rank %}style="color: {{ current_user_rank.current_color }};"{% endif %}>
+                      {{ current_user_rank.current_name }}
+                    </div>
+                    <div class="progress qc-rank-progress">
+                      <div class="progress-bar qc-rank-progress-bar"
+                           role="progressbar"
+                           {% if current_user_rank %}style="width: {{ current_user_rank.progress_percent }}%; background: {{ current_user_rank.current_color }};"{% endif %}
+                           aria-valuenow="{{ current_user_rank.progress_percent|int }}"
+                           aria-valuemin="0"
+                           aria-valuemax="100"></div>
+                    </div>
+                    <div class="small opacity-75 mt-1">
+                      {% if current_user_rank.is_max_rank %}
+                        Rango máximo alcanzado.
+                      {% else %}
+                        Te faltan {{ current_user_rank.points_remaining }} pts para {{ current_user_rank.next_name }}.
+                      {% endif %}
+                    </div>
+                  {% endif %}
+                </div>
 
-              <!-- IA -->
-              <li class="nav-item">
-                <a class="nav-link {% if request.endpoint == 'asistente_ia' %}active{% endif %}"
-                   href="{{ url_for('asistente_ia') }}">IA</a>
-              </li>
+                <div class="qc-user-menu-links d-flex flex-wrap gap-2 px-2">
+                  <a class="btn btn-sm qc-pill-link {% if request.endpoint == 'dashboard' %}active{% endif %}"
+                     href="{{ url_for('dashboard') }}">Dashboard</a>
 
-              <!-- Estadísticas -->
-              <li class="nav-item">
-                <a class="nav-link {% if request.endpoint == 'ver_estadisticas' %}active{% endif %}"
-                   href="{{ url_for('ver_estadisticas') }}">Estadísticas</a>
-              </li>
+                  <a class="btn btn-sm qc-pill-link {% if request.endpoint and 'quest' in request.endpoint %}active{% endif %}"
+                     href="{{ url_for('listar_quests') }}">Retos</a>
 
-              <!-- Gastos -->
-              <li class="nav-item">
-                <a
-                  class="nav-link {% if request.endpoint == 'listar_gastos' or request.endpoint == 'nuevo_gasto' %}active{% endif %}"
-                  href="{{ url_for('listar_gastos') }}"
-                >
-                  Gastos
-                </a>
-              </li>
+                  <a class="btn btn-sm qc-pill-link {% if request.endpoint == 'mis_insignias' %}active{% endif %}"
+                     href="{{ url_for('mis_insignias') }}">Insignias</a>
 
-              <!-- Notificaciones -->
-              <li class="nav-item">
-                <a class="nav-link {% if request.endpoint == 'ver_notificaciones' %}active{% endif %}"
-                   href="{{ url_for('ver_notificaciones') }}">Notificaciones</a>
-              </li>
+                  <a class="btn btn-sm qc-pill-link {% if request.endpoint == 'asistente_ia' %}active{% endif %}"
+                     href="{{ url_for('asistente_ia') }}">IA</a>
 
-              <!-- Perfil -->
-              <li class="nav-item">
-                <a class="nav-link {% if request.endpoint == 'perfil' %}active{% endif %}"
-                   href="{{ url_for('perfil') }}">Perfil</a>
-              </li>
+                  <a class="btn btn-sm qc-pill-link {% if request.endpoint == 'ver_estadisticas' %}active{% endif %}"
+                     href="{{ url_for('ver_estadisticas') }}">Estadísticas</a>
 
-              <!-- Logout -->
-              <li class="nav-item ms-lg-3">
-                <a class="btn btn-outline-danger btn-sm" href="{{ url_for('logout') }}">Salir</a>
-              </li>
+                  <a class="btn btn-sm qc-pill-link {% if request.endpoint == 'listar_gastos' or request.endpoint == 'nuevo_gasto' %}active{% endif %}"
+                     href="{{ url_for('listar_gastos') }}">Gastos</a>
 
-            {% else %}
+                  <a class="btn btn-sm qc-pill-link {% if request.endpoint == 'perfil' %}active{% endif %}"
+                     href="{{ url_for('perfil') }}">Perfil</a>
+                </div>
+
+                <hr class="dropdown-divider my-2">
+
+                <div class="px-2 d-flex justify-content-end">
+                  <a class="btn btn-outline-danger btn-sm" href="{{ url_for('logout') }}">Salir</a>
+                </div>
+
+              </div>
+            </div>
+
+          </div>
+
+        {% else %}
+
+          <!-- Mobile toggle -->
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#navbarNav" aria-controls="navbarNav"
+                  aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+          </button>
+
+          <!-- Menu -->
+          <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav ms-auto align-items-lg-center">
 
               <!-- Login -->
               <li class="nav-item">
@@ -140,10 +182,10 @@
                 <a class="nav-link" href="{{ url_for('register') }}">Registrarse</a>
               </li>
 
-            {% endif %}
+            </ul>
+          </div>
 
-          </ul>
-        </div>
+        {% endif %}
 
       </div>
     </nav>
@@ -154,14 +196,95 @@
       <!-- Mensajes Flash -->
       {% with mensajes = get_flashed_messages(with_categories=true) %}
         {% if mensajes %}
+          {% set normal_flashes = [] %}
+          {% set achievement_flashes = [] %}
+          {% set rankup_flashes = [] %}
+
           {% for categoria, mensaje in mensajes %}
-            <div class="qc-card p-0 mb-3">
-              <div class="alert alert-{{ categoria }} alert-dismissible fade show m-0" role="alert">
-                {{ mensaje }}
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            {% if categoria == 'achievement' %}
+              {% set _ = achievement_flashes.append(mensaje) %}
+            {% elif categoria == 'rank_up' %}
+              {% set _ = rankup_flashes.append(mensaje) %}
+            {% else %}
+              {% set _ = normal_flashes.append({'category': categoria, 'message': mensaje}) %}
+            {% endif %}
+          {% endfor %}
+
+          {% if normal_flashes %}
+            {% for item in normal_flashes %}
+              <div class="qc-card p-0 mb-3">
+                <div class="alert alert-{{ item.category }} alert-dismissible fade show m-0" role="alert">
+                  {{ item.message }}
+                  <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+              </div>
+            {% endfor %}
+          {% endif %}
+
+          {% if achievement_flashes %}
+            <div class="qc-achievement-stack" aria-live="polite" aria-atomic="true">
+              {% for item in achievement_flashes %}
+                <div class="qc-achievement-toast" data-achievement-toast>
+                  <div class="qc-achievement-icon">
+                    {% if item.icono and item.icono_tipo == 'imagen' %}
+                      <img
+                        src="{{ url_for('static', filename='img/insignias/' ~ item.icono) }}"
+                        alt="{{ item.message }}"
+                        class="qc-achievement-icon-image"
+                      >
+                    {% elif item.icono and item.icono_tipo == 'clase' %}
+                      <i class="bi {{ item.icono }}"></i>
+                    {% else %}
+                      <i class="bi bi-trophy-fill"></i>
+                    {% endif %}
+                  </div>
+                  <div class="qc-achievement-body">
+                    <div class="qc-achievement-title">{{ item.title or 'Logro desbloqueado' }}</div>
+                    <div class="qc-achievement-message">{{ item.message }}</div>
+                    {% if item.descripcion %}
+                      <div class="qc-achievement-meta">{{ item.descripcion }}</div>
+                    {% elif item.points_bonus %}
+                      <div class="qc-achievement-meta">+{{ item.points_bonus }} puntos QuestCash</div>
+                    {% elif item.streak_days %}
+                      <div class="qc-achievement-meta">Racha de {{ item.streak_days }} días</div>
+                    {% endif %}
+                  </div>
+                  <button type="button" class="qc-achievement-close" data-achievement-close aria-label="Cerrar">
+                    <i class="bi bi-x-lg"></i>
+                  </button>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+
+          {% if rankup_flashes %}
+            {% set rank_item = rankup_flashes[-1] %}
+            <div
+              class="qc-rankup-overlay"
+              data-rankup-overlay
+              data-rank-color="{{ rank_item.rank_color or '#22C55E' }}"
+              data-rank-accent="{{ rank_item.rank_accent or '#BBF7D0' }}"
+            >
+              <div class="qc-rankup-backdrop" data-rankup-close></div>
+              <div class="qc-rankup-card" role="dialog" aria-modal="true" aria-labelledby="qcRankUpTitle">
+                <div class="qc-rankup-badge" style="background: {{ rank_item.rank_accent or '#BBF7D0' }}; color: {{ rank_item.rank_color or '#22C55E' }}; border-color: {{ rank_item.rank_color or '#22C55E' }}33;">
+                  NUEVO RANGO
+                </div>
+                <h2 class="qc-rankup-title" id="qcRankUpTitle">{{ rank_item.title or '¡Subiste de rango!' }}</h2>
+                <div class="qc-rankup-rank" style="color: {{ rank_item.rank_color or '#22C55E' }};">
+                  {{ rank_item.rank_name or rank_item.message }}
+                </div>
+                <p class="qc-rankup-message">{{ rank_item.message }}</p>
+                <div class="qc-rankup-points">{{ rank_item.points or 0 }} pts acumulados</div>
+                {% if rank_item.is_max_rank %}
+                  <p class="qc-rankup-next">Has alcanzado el rango máximo disponible.</p>
+                {% elif rank_item.next_name %}
+                  <p class="qc-rankup-next">Te faltan {{ rank_item.points_remaining or 0 }} pts para {{ rank_item.next_name }}.</p>
+                {% endif %}
+                <button type="button" class="btn btn-light qc-rankup-button" data-rankup-close>Continuar</button>
               </div>
             </div>
-          {% endfor %}
+          {% endif %}
         {% endif %}
       {% endwith %}
 
@@ -193,6 +316,7 @@
     <script src="{{ url_for('static', filename='js/insignias3d.js') }}"></script>
     <!-- Animaciones personalizadas QuestCash -->
     <script src="{{ url_for('static', filename='js/animations.js') }}"></script>
+    {% block scripts_extra %}{% endblock %}
 
   </body>
 </html>

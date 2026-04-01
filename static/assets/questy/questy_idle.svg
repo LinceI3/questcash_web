@@ -1,0 +1,27 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <!-- shadow -->
+  <ellipse cx="32" cy="54" rx="14" ry="4" fill="#00000022"/>
+
+  <!-- body -->
+  <circle cx="32" cy="32" r="18" fill="#2F80ED"/>
+
+  <!-- helmet -->
+  <circle cx="32" cy="26" r="12" fill="#1F5FBF"/>
+
+  <!-- logo coin -->
+  <circle cx="32" cy="26" r="4" fill="#FFD54F"/>
+
+  <!-- eyes -->
+  <circle cx="26" cy="34" r="3" fill="white"/>
+  <circle cx="38" cy="34" r="3" fill="white"/>
+
+  <!-- pupils -->
+  <circle cx="26" cy="35" r="1.5" fill="#222"/>
+  <circle cx="38" cy="35" r="1.5" fill="#222"/>
+
+  <!-- smile -->
+  <path d="M26 40 Q32 44 38 40" stroke="#ffffff" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+  <!-- backpack -->
+  <rect x="44" y="28" width="6" height="10" rx="2" fill="#1B4F9C"/>
+</svg>
