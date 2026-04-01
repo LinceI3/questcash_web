@@ -13,3 +13,7 @@ questcash.db
 
 # Cosas de macOS
 .DS_Store
+**/.DS_Store
+
+# Datasets crudos pesados
+data/raw/
