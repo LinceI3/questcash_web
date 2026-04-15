@@ -7,6 +7,8 @@ on:
 jobs:
   ci_pipeline:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
 
     steps:
     - name: Clonar repositorio
@@ -21,11 +23,10 @@ jobs:
       run: |
         pip install -r requirements.txt
 
-    - - name: Ejecutar tests
-        run: |
-          echo "Ejecutando pruebas automatizadas..."
-          export PYTHONPATH=$PYTHONPATH:$(pwd)
-          pytest
+    - name: Ejecutar tests
+      run: |
+        echo "Ejecutando pruebas automatizadas..."
+        pytest
 
     - name: Build Docker image
       run: |
