@@ -15,14 +15,68 @@
         </p>
       </div>
 
-      <div class="d-flex flex-wrap gap-2 stats-hero-actions">
+      <div class="d-flex flex-wrap gap-2 stats-hero-actions no-print">
         <a href="{{ url_for('dashboard') }}" class="btn btn-outline-primary btn-sm">Volver al dashboard</a>
         <a href="{{ url_for('listar_quests') }}" class="btn btn-primary btn-sm">Ver metas</a>
+        <button type="button" class="btn btn-dark btn-sm" onclick="window.print()">Descargar PDF</button>
       </div>
     </div>
   </section>
 
-  <section class="stats-summary-grid mb-4">
+  <section class="stats-print-header print-only">
+    <div class="stats-print-brand">
+      <span class="stats-print-eyebrow">QuestCash · Reporte de estadísticas</span>
+      <h1 class="stats-print-title">Resumen estadístico y análisis de progreso</h1>
+      <p class="stats-print-subtitle">
+        Reporte generado para {{ g.usuario_actual.alias or g.usuario_actual.nombre }} con enfoque en ahorro, metas y comportamiento financiero dentro de QuestCash.
+      </p>
+    </div>
+    <div class="stats-print-meta">
+      <div><strong>Usuario:</strong> {{ g.usuario_actual.alias or g.usuario_actual.nombre }}</div>
+      <div><strong>Correo:</strong> {{ g.usuario_actual.correo }}</div>
+      <div><strong>Fecha:</strong> <span id="printDate"></span></div>
+    </div>
+  </section>
+
+  <section class="qc-card stats-report-summary mb-4 print-report-block">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-3">
+      <div>
+        <h2 class="h5 mb-1 fw-bold">Lectura ejecutiva</h2>
+        <p class="text-muted small mb-0">
+          Este apartado resume la situación actual de tu perfil en QuestCash con base en ahorro acumulado, actividad reciente y avance de metas.
+        </p>
+      </div>
+      {% if current_user_rank %}
+        <div class="stats-rank-pill" style="--rank-color: {{ current_user_rank.current_color }}; --rank-accent: {{ current_user_rank.current_accent }};">
+          {{ current_user_rank.current_name }} · {{ current_user_rank.points }} pts
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="stats-report-text-grid">
+      <div class="stats-report-note">
+        <strong>Ahorro acumulado:</strong>
+        Actualmente llevas ${{ "%.0f"|format(resumen.total_ahorrado or 0) }} MXN registrados en QuestCash,
+        distribuidos en {{ resumen.metas_activas or 0 }} meta(s) activa(s) y {{ resumen.metas_completadas or 0 }} meta(s) completada(s).
+      </div>
+
+      <div class="stats-report-note">
+        <strong>Actividad registrada:</strong>
+        Hasta ahora has realizado {{ resumen.num_aportes or 0 }} aporte(s), lo que permite observar tu ritmo de constancia
+        y cómo se reparte tu avance entre distintos objetivos.
+      </div>
+
+      {% if resumen.meta_top_nombre %}
+      <div class="stats-report-note">
+        <strong>Meta con mayor peso:</strong>
+        La meta que concentra más ahorro acumulado es <strong>{{ resumen.meta_top_nombre }}</strong>, con un total aproximado de
+        ${{ "%.0f"|format(resumen.meta_top_monto or 0) }} MXN.
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="stats-summary-grid mb-4 print-report-block">
     <div class="qc-card stats-summary-card">
       <div class="small text-muted mb-1">💰 Total ahorrado</div>
       <div class="fw-bold fs-4">${{ "%.0f"|format(resumen.total_ahorrado or 0) }}</div>
@@ -49,7 +103,7 @@
   </section>
 
   {% if resumen.meta_top_nombre %}
-    <section class="qc-card stats-highlight-card mb-4">
+    <section class="qc-card stats-highlight-card mb-4 print-report-block">
       <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-2">
         <div>
           <span class="stats-eyebrow">Meta destacada</span>
@@ -63,7 +117,7 @@
     </section>
   {% endif %}
 
-  <section class="qc-card stats-analysis-card mb-4">
+  <section class="qc-card stats-analysis-card mb-4 print-report-block">
     <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-2 mb-3">
       <div>
         <h2 class="h5 mb-1 fw-bold">Cómo van tus retos</h2>
@@ -117,7 +171,7 @@
     {% endif %}
   </section>
 
-  <div class="stats-chart-grid mb-4">
+  <div class="stats-chart-grid mb-4 print-report-block">
     <section class="qc-card stats-chart-card">
       <div class="mb-3">
         <h2 class="h5 mb-1 fw-bold">Ahorro en los últimos 30 días</h2>
@@ -201,6 +255,11 @@
         }
       }
     });
+  }
+  const printDateEl = document.getElementById('printDate');
+  if (printDateEl) {
+    const now = new Date();
+    printDateEl.textContent = now.toLocaleString('es-MX');
   }
 </script>
 
