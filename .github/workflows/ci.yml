@@ -21,10 +21,11 @@ jobs:
       run: |
         pip install -r requirements.txt
 
-    - name: Ejecutar tests
-      run: |
-        echo "Ejecutando pruebas automatizadas..."
-        pytest
+    - - name: Ejecutar tests
+        run: |
+          echo "Ejecutando pruebas automatizadas..."
+          export PYTHONPATH=$PYTHONPATH:$(pwd)
+          pytest
 
     - name: Build Docker image
       run: |
