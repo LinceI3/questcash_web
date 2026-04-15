@@ -5,7 +5,7 @@ on:
     branches: ["main"]
 
 jobs:
-  build-test-deploy:
+  ci_pipeline:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,10 +23,12 @@ jobs:
 
     - name: Ejecutar tests
       run: |
-        pytest || echo "No hay tests, pero continúa"
+        echo "Ejecutando pruebas automatizadas..."
+        pytest
 
     - name: Build Docker image
       run: |
+        echo "Construyendo imagen Docker..."
         docker build -t questcash .
 
     - name: Simulación de Deploy
@@ -36,4 +38,6 @@ jobs:
         echo "Aplicación desplegada correctamente ✅"
 
     - name: Finalización
-      run: echo "Pipeline CI/CD completado 🎉"
+      run: |
+        echo "Pipeline CI/CD completado correctamente 🎉"
+        echo "Sistema validado y listo para producción"
