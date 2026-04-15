@@ -37,9 +37,9 @@ jobs:
       run: |
         echo "🚀 Desplegando aplicación..."
         sleep 3
-        echo "Aplicación desplegada correctamente ✅"
+        echo "Aplicación desplegada correctamente "
 
     - name: Finalización
       run: |
-        echo "Pipeline CI/CD completado correctamente 🎉"
+        echo "Pipeline CI/CD completado correctamente "
         echo "Sistema validado y listo para producción"
