@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    container_name: questcash_web
+    ports:
+      - "80:5000"
+    environment:
+      - DATABASE_URL=postgresql://questcash:1234@db:5432/questcash
+      - SECRET_KEY=super-secret-production
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15
+    container_name: questcash_db
+    restart: always
+    environment:
+      POSTGRES_USER: questcash
+      POSTGRES_PASSWORD: 1234
+      POSTGRES_DB: questcash
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

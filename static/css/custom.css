@@ -3361,6 +3361,280 @@ body.bg-dark .ia-main-chat-card .ia-questy-message-body {
   }
 }
 /* =========================================================
+   PRINT REPORT — Estadísticas PDF desde la misma vista
+   ========================================================= */
+
+.print-only {
+  display: none !important;
+}
+
+.stats-report-summary {
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.08);
+}
+
+.stats-report-text-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.stats-report-note {
+  border-radius: 18px;
+  padding: 0.95rem 1rem;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.05);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.stats-rank-pill {
+  --rank-color: #2563eb;
+  --rank-accent: #dbeafe;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 0.95rem;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--rank-color);
+  background: var(--rank-accent);
+  border: 1px solid color-mix(in srgb, var(--rank-color) 18%, transparent);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.stats-print-header {
+  display: none;
+}
+
+.stats-print-brand {
+  max-width: 65%;
+}
+
+.stats-print-eyebrow {
+  display: inline-flex;
+  margin-bottom: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.10);
+  color: #1d4ed8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.stats-print-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.8rem;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+}
+
+.stats-print-subtitle {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.stats-print-meta {
+  min-width: 250px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 18px;
+  padding: 0.95rem 1rem;
+  background: rgba(248, 250, 252, 0.96);
+  font-size: 0.86rem;
+  line-height: 1.65;
+}
+
+body.bg-dark .stats-report-summary,
+body.bg-dark .stats-report-note {
+  border-color: rgba(96, 165, 250, 0.16);
+}
+
+body.bg-dark .stats-report-note {
+  background: rgba(15, 23, 42, 0.82);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.34);
+}
+
+@media (max-width: 991.98px) {
+  .stats-report-text-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  body * {
+    animation: none !important;
+    transition: none !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    filter: none !important;
+  }
+
+  .navbar,
+  .qc-achievement-stack,
+  .qc-rankup-overlay,
+  .no-print,
+  .btn,
+  .dropdown,
+  .qc-user-menu,
+  footer,
+  script {
+    display: none !important;
+  }
+
+  .print-only {
+    display: flex !important;
+  }
+
+  .stats-print-header {
+    display: flex !important;
+    justify-content: space-between;
+    gap: 18px;
+    align-items: flex-start;
+    padding-bottom: 14px;
+    margin-bottom: 18px;
+    border-bottom: 2px solid #dbe2ea;
+  }
+
+  .stats-page {
+    display: block !important;
+    gap: 0 !important;
+  }
+
+  .stats-hero-card {
+    padding: 0 !important;
+    margin-bottom: 14px !important;
+    border: none !important;
+    background: #ffffff !important;
+  }
+
+  .stats-hero-card .stats-eyebrow,
+  .stats-hero-card .stats-hero-actions,
+  .stats-hero-card .row > .col-lg-4,
+  .stats-hero-card .text-muted.small.mb-0 {
+    display: none !important;
+  }
+
+  .stats-hero-card .row > .col-lg-8 {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+  }
+
+  .stats-hero-card h1,
+  .stats-hero-card h2,
+  .stats-hero-card h3,
+  .stats-hero-card .display-6,
+  .stats-hero-card .fw-bold {
+    color: #0f172a !important;
+  }
+
+  .stats-hero-card,
+  .stats-summary-card,
+  .stats-highlight-card,
+  .stats-analysis-card,
+  .stats-chart-card,
+  .stats-report-summary,
+  .stats-analysis-row,
+  .stats-report-note,
+  .qc-card,
+  .quest-card {
+    background: #ffffff !important;
+    border: 1px solid #dbe2ea !important;
+    color: #0f172a !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .stats-summary-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px !important;
+  }
+
+  .stats-chart-grid {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .stats-report-text-grid {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+
+  .stats-rank-pill {
+    color: #0f172a !important;
+    background: #eef2ff !important;
+    border: 1px solid #c7d2fe !important;
+  }
+
+  .stats-analysis-row:hover,
+  .qc-card:hover,
+  .quest-card:hover,
+  .qc-pill:hover {
+    transform: none !important;
+  }
+
+  .stats-bar-track,
+  .progress,
+  .quest-progress-bar,
+  .qc-rank-progress,
+  .progress-shell {
+    background: #e5e7eb !important;
+  }
+
+  .stats-bar-real,
+  .progress-bar,
+  .qc-rank-progress-bar,
+  .progress-bar.qc-green,
+  .quest-progress-bar::after,
+  .progress-bar,
+  .progress-bar.qc-green {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  canvas {
+    max-width: 100% !important;
+    height: auto !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .print-report-block {
+    margin-bottom: 14px !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .text-muted,
+  .small,
+  .stats-print-subtitle,
+  .stats-print-meta {
+    color: #475569 !important;
+  }
+}
+
+/* =========================================================
    ESTADISTICAS — Modern analytics view
    ========================================================= */
 

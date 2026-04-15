@@ -1923,6 +1923,50 @@ def create_app():
             analisis=resultados_ia["analisis_por_quest"],
         )
 
+    @app.route("/estadisticas/pdf")
+    @login_requerido
+    def exportar_estadisticas_pdf():
+        """Vista imprimible para exportar estadísticas como PDF desde el navegador."""
+        datos = calcular_estadisticas(g.usuario_actual)
+        resultados_ia = analizar_habitos_ahorro(g.usuario_actual)
+        gastos_resumen = resumen_gastos_para_ia(g.usuario_actual)
+        rank_state = calcular_estado_rango_perfil(
+            getattr(g.usuario_actual, "puntos_totales", 0) or 0
+        )
+
+        analisis_activos = [
+            item for item in resultados_ia["analisis_por_quest"]
+            if item["quest"].estatus not in ["cancelado", "completado"]
+        ]
+
+        meta_destacada = None
+        if analisis_activos:
+            meta_destacada = sorted(
+                analisis_activos,
+                key=lambda item: (
+                    item.get("probabilidad_num", 0),
+                    item.get("dias_restantes", 9999),
+                    -item.get("faltante", 0),
+                ),
+            )[0]
+
+        fecha_generacion = datetime.utcnow()
+
+        return render_template(
+            "estadisticas_pdf.html",
+            usuario=g.usuario_actual,
+            resumen=datos["resumen"],
+            serie_30=datos["serie_30_dias"],
+            serie_metas=datos["serie_por_meta"],
+            analisis=resultados_ia["analisis_por_quest"],
+            analisis_activos=analisis_activos,
+            meta_destacada=meta_destacada,
+            recomendaciones=resultados_ia["recomendaciones"],
+            gastos_resumen=gastos_resumen,
+            rank_state=rank_state,
+            fecha_generacion=fecha_generacion,
+        )
+
     def obtener_o_crear_categoria_gasto(nombre_raw):
         """ 
         Normaliza el nombre de categoría y la crea si no existe.
@@ -2863,4 +2907,4 @@ def create_app():
 app = create_app()
 if __name__ == "__main__":
     
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)

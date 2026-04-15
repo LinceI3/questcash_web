@@ -5,10 +5,13 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 class Config:
     # Clave secreta fuerte (cámbiala en producción por una variable de entorno)
-    SECRET_KEY = "super-secret-questcash-change-this-in-production"
+    SECRET_KEY = os.environ.get("SECRET_KEY", "dev_key")
 
     # Base de datos
-    SQLALCHEMY_DATABASE_URI = "sqlite:///" + os.path.join(BASE_DIR, "questcash.db")
+    SQLALCHEMY_DATABASE_URI = os.environ.get(
+        "DATABASE_URL",
+        "sqlite:///" + os.path.join(BASE_DIR, "questcash.db")
+    )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # Seguridad de formularios (CSRF)
