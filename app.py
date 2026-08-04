@@ -29,6 +29,7 @@ from models import (
     UsuarioInsignia,
     CategoriaGasto,
     Gasto,
+    Notificacion,
 )
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -98,6 +99,52 @@ def seed_insignias():
     if ahorro and ahorro.icono != "Ahorro_1000.png":
         ahorro.icono = "Ahorro_1000.png"
         db.session.commit()
+
+
+RAREZA_COLORS = {
+    "común": "#22C55E",
+    "rara": "#2563EB",
+    "épica": "#9333EA",
+    "legendaria": "#F59E0B",
+    "mítica": "#EC4899",
+}
+
+
+def crear_notificacion(usuario, tipo, titulo, mensaje, icono=None, color=None, quest=None):
+    """Crea una notificación persistida (evento real: meta completada,
+    insignia nueva, aporte de un colaborador). Sin commit aquí; el caller
+    es responsable, igual que otorgar_insignia."""
+    notif = Notificacion(
+        usuario_id=usuario.id,
+        tipo=tipo,
+        titulo=titulo,
+        mensaje=mensaje,
+        icono=icono,
+        color=color,
+        quest_id=quest.id if quest is not None else None,
+    )
+    db.session.add(notif)
+    return notif
+
+
+def _ensure_schema():
+    """Agrega columnas nuevas a tablas ya existentes.
+
+    El proyecto no usa un framework de migraciones (Alembic): db.create_all()
+    solo crea tablas que faltan, no altera las que ya existen. Esto corre un
+    ALTER TABLE best-effort para columnas agregadas después del despliegue
+    inicial, ignorando el error si la columna ya existe (idempotente, seguro
+    de correr en cada arranque tanto en SQLite local como en Postgres).
+    """
+    statements = [
+        "ALTER TABLE quests ADD COLUMN icono VARCHAR(30)",
+    ]
+    for statement in statements:
+        try:
+            db.session.execute(db.text(statement))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
 
 def create_app():
@@ -348,6 +395,11 @@ def create_app():
             if 0 <= dias_restantes <= 7 and progreso < 80:
                 notificaciones.append({
                     "tipo": "warning",
+                    "categoria": "recordatorio",
+                    "titulo": "Recordatorio",
+                    "icono": "alarm",
+                    "color": "#F97316",
+                    "quest_id": q.id,
                     "mensaje": f"Tu reto '{q.nombre}' está por vencer en {dias_restantes} día(s) y llevas {progreso}% de avance."
                 })
 
@@ -355,6 +407,11 @@ def create_app():
             if dias_restantes < 0 and progreso < 100:
                 notificaciones.append({
                     "tipo": "danger",
+                    "categoria": "recordatorio",
+                    "titulo": "Meta vencida",
+                    "icono": "alert-circle",
+                    "color": "#EF4444",
+                    "quest_id": q.id,
                     "mensaje": f"Tu reto '{q.nombre}' ya venció y no alcanzaste el monto objetivo."
                 })
 
@@ -369,6 +426,11 @@ def create_app():
             if ultimo_mov is None and progreso == 0:
                 notificaciones.append({
                     "tipo": "info",
+                    "categoria": "recordatorio",
+                    "titulo": "Recordatorio",
+                    "icono": "time",
+                    "color": "#3B82F6",
+                    "quest_id": q.id,
                     "mensaje": f"Aún no has registrado tu primer ahorro en el reto '{q.nombre}'."
                 })
             elif ultimo_mov is not None and progreso < 100:
@@ -376,6 +438,11 @@ def create_app():
                 if dias_sin_mov >= 7:
                     notificaciones.append({
                         "tipo": "info",
+                        "categoria": "recordatorio",
+                        "titulo": "Recordatorio",
+                        "icono": "time",
+                        "color": "#3B82F6",
+                        "quest_id": q.id,
                         "mensaje": f"Llevas {dias_sin_mov} día(s) sin registrar movimientos en '{q.nombre}'."
                     })
 
@@ -400,6 +467,10 @@ def create_app():
                 if total_mes == 0:
                     notificaciones.append({
                         "tipo": "info",
+                        "categoria": "consejo_ia",
+                        "titulo": "Questy consejo",
+                        "icono": "sparkles",
+                        "color": "#2563EB",
                         "mensaje": (
                             "Aún no has registrado gastos en tu módulo de control de gastos este mes. "
                             "Si empiezas a registrar tus consumos, Questy podrá ayudarte a detectar gastos hormiga."
@@ -410,6 +481,10 @@ def create_app():
                     if categoria_top and categoria_top_monto >= 0.5 * total_mes and total_mes >= 500:
                         notificaciones.append({
                             "tipo": "warning",
+                            "categoria": "consejo_ia",
+                            "titulo": "Questy consejo",
+                            "icono": "sparkles",
+                            "color": "#2563EB",
                             "mensaje": (
                                 f"Este mes has gastado aproximadamente {categoria_top_monto:,.0f} MXN en '{categoria_top}', "
                                 "lo que representa la mayor parte de tus gastos. Revisa si todos esos gastos son realmente necesarios."
@@ -420,6 +495,10 @@ def create_app():
                     if total_hormiga >= 200 and hormiga_count >= 3:
                         notificaciones.append({
                             "tipo": "info",
+                            "categoria": "consejo_ia",
+                            "titulo": "Questy consejo",
+                            "icono": "sparkles",
+                            "color": "#2563EB",
                             "mensaje": (
                                 f"Llevas {hormiga_count} gasto(s) hormiga por un total de ~{total_hormiga:,.0f} MXN este mes. "
                                 "Si recortas aunque sea una parte y la conviertes en aportes a tus retos, podrías acelerar tus metas."
@@ -449,6 +528,10 @@ def create_app():
                     if total_mes > ahorro_30 and total_mes >= 1000 and ahorro_30 > 0:
                         notificaciones.append({
                             "tipo": "warning",
+                            "categoria": "consejo_ia",
+                            "titulo": "Questy consejo",
+                            "icono": "sparkles",
+                            "color": "#2563EB",
                             "mensaje": (
                                 f"En este mes has gastado alrededor de {total_mes:,.0f} MXN, "
                                 f"mientras que has ahorrado cerca de {ahorro_30:,.0f} MXN. "
@@ -555,6 +638,15 @@ def create_app():
             # Solo el creador
             quest.usuario.puntos_totales += quest.puntos_recompensa
             notificar_subida_rango(quest.usuario, quest.puntos_recompensa)
+            crear_notificacion(
+                quest.usuario,
+                tipo="meta_completada",
+                titulo="¡Meta completada!",
+                mensaje=f"Felicidades, completaste {quest.nombre}.",
+                icono="trophy",
+                color="#22C55E",
+                quest=quest,
+            )
             quest.puntos_otorgados = True
             # Insignias para el creador
             checar_insignias_por_evento(quest.usuario, "reto_completado", quest=quest, events=events)
@@ -566,6 +658,15 @@ def create_app():
         for p in participaciones:
             p.usuario.puntos_totales += puntos_por_usuario
             notificar_subida_rango(p.usuario, puntos_por_usuario)
+            crear_notificacion(
+                p.usuario,
+                tipo="meta_completada",
+                titulo="¡Meta completada!",
+                mensaje=f"Felicidades, completaste {quest.nombre}.",
+                icono="trophy",
+                color="#22C55E",
+                quest=quest,
+            )
             checar_insignias_por_evento(p.usuario, "reto_completado", quest=quest, events=events)
 
         quest.puntos_otorgados = True
@@ -1520,6 +1621,14 @@ def create_app():
                 "descripcion": insignia.descripcion,
             },
         )
+        crear_notificacion(
+            usuario,
+            tipo="insignia_nueva",
+            titulo="Nueva insignia",
+            mensaje=f"Desbloqueaste la insignia {insignia.nombre}.",
+            icono="shield-checkmark",
+            color=RAREZA_COLORS.get((insignia.rareza or "").lower(), "#FBBF24"),
+        )
         if events is not None:
             events.append({
                 "type": "insignia",
@@ -1590,6 +1699,25 @@ def create_app():
             quest.monto_actual += monto_float
         else:
             quest.monto_actual -= monto_float
+
+        # Avisar a los demás colaboradores (no a quien aportó) cuando el
+        # movimiento es un aporte a una meta colaborativa.
+        if tipo == "aporte" and quest.tipo == "colaborativo":
+            otros_participantes = (
+                ParticipacionQuest.query
+                .filter(ParticipacionQuest.quest_id == quest.id, ParticipacionQuest.usuario_id != usuario.id)
+                .all()
+            )
+            for participacion in otros_participantes:
+                crear_notificacion(
+                    participacion.usuario,
+                    tipo="aporte_colaborador",
+                    titulo="Aporte recibido",
+                    mensaje=f"{usuario.nombre} aportó ${monto_float:,.0f} a {quest.nombre}.",
+                    icono="people-circle",
+                    color="#16A34A",
+                    quest=quest,
+                )
 
         # Recalcular la recompensa contextual del reto antes de evaluar si se completa.
         # Así, los puntos que se muestran y los que realmente se otorgan salen de la misma fuente.
@@ -2656,6 +2784,7 @@ def create_app():
     # Crear tablas + insignias base al finalizar la configuración de la app
     with app.app_context():
         db.create_all()
+        _ensure_schema()
         seed_insignias()
     return app
 
