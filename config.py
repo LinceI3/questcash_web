@@ -38,3 +38,7 @@ class Config:
     MAX_CONTENT_LENGTH = 2 * 1024 * 1024  # 2 MB
 
     ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg"}
+
+    # --- API móvil (JWT) ---
+    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", SECRET_KEY)
+    JWT_EXP_DAYS = int(os.environ.get("JWT_EXP_DAYS", 30))

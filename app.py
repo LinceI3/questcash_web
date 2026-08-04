@@ -33,6 +33,13 @@ from models import (
 
 from werkzeug.security import generate_password_hash, check_password_hash
 from ia.services.questy_engine import QuestyInput, evaluate_quest
+from validators import (
+    validar_registro,
+    validar_quest_form,
+    validar_movimiento,
+    validar_gasto,
+)
+from api import register_api
 
 csrf = CSRFProtect()
 
@@ -510,7 +517,7 @@ def create_app():
 
         return max(5, int(round(puntos)))
 
-    def otorgar_puntos_por_completado(quest):
+    def otorgar_puntos_por_completado(quest, events=None):
         """
         Reparte los puntos del reto entre todos los participantes
         (creador + colaboradores) cuando se completa, dispara insignias
@@ -529,6 +536,18 @@ def create_app():
 
             if rango_antes["current_key"] != rango_despues["current_key"]:
                 emitir_flash_subida_rango(rango_despues)
+                if events is not None:
+                    events.append({
+                        "type": "rank_up",
+                        "rank_key": rango_despues["current_key"],
+                        "rank_name": rango_despues["current_name"],
+                        "rank_color": rango_despues["current_color"],
+                        "rank_accent": rango_despues["current_accent"],
+                        "points": rango_despues["points"],
+                        "is_max_rank": rango_despues["is_max_rank"],
+                        "next_name": rango_despues.get("next_name"),
+                        "points_remaining": rango_despues.get("points_remaining", 0),
+                    })
 
         participaciones = ParticipacionQuest.query.filter_by(quest_id=quest.id).all()
 
@@ -538,7 +557,7 @@ def create_app():
             notificar_subida_rango(quest.usuario, quest.puntos_recompensa)
             quest.puntos_otorgados = True
             # Insignias para el creador
-            checar_insignias_por_evento(quest.usuario, "reto_completado", quest=quest)
+            checar_insignias_por_evento(quest.usuario, "reto_completado", quest=quest, events=events)
             return
 
         num_participantes = len(participaciones)
@@ -547,7 +566,7 @@ def create_app():
         for p in participaciones:
             p.usuario.puntos_totales += puntos_por_usuario
             notificar_subida_rango(p.usuario, puntos_por_usuario)
-            checar_insignias_por_evento(p.usuario, "reto_completado", quest=quest)
+            checar_insignias_por_evento(p.usuario, "reto_completado", quest=quest, events=events)
 
         quest.puntos_otorgados = True
 
@@ -1422,10 +1441,14 @@ def create_app():
         }
 
 
-    def otorgar_bonus_racha(usuario, rachas_antes, rachas_despues):
+    def otorgar_bonus_racha(usuario, rachas_antes, rachas_despues, events=None):
         """
         Asigna puntos extra cuando el usuario alcanza nuevas rachas de días consecutivos
         ahorrando. Solo se otorga bonus cuando la racha actual cruza ciertos umbrales.
+
+        Si se pasa `events` (lista), se le agrega un dict estructurado por cada bonus
+        otorgado, además del flash() de siempre — así los consumidores de la API JSON
+        pueden devolver el evento sin depender del sistema de flash (session/HTML).
         """
         if not rachas_antes or not rachas_despues:
             return
@@ -1459,9 +1482,15 @@ def create_app():
                         "points_bonus": puntos,
                     },
                 )
+                if events is not None:
+                    events.append({
+                        "type": "streak_bonus",
+                        "streak_days": limite,
+                        "points_bonus": puntos,
+                    })
 
 
-    def otorgar_insignia(codigo, usuario):
+    def otorgar_insignia(codigo, usuario, events=None):
         """Otorga una insignia al usuario si no la tenía ya."""
         insignia = Insignia.query.filter_by(codigo=codigo).first()
         if not insignia:
@@ -1491,15 +1520,24 @@ def create_app():
                 "descripcion": insignia.descripcion,
             },
         )
+        if events is not None:
+            events.append({
+                "type": "insignia",
+                "codigo": insignia.codigo,
+                "nombre": insignia.nombre,
+                "descripcion": insignia.descripcion,
+                "rareza": insignia.rareza,
+                "icono": insignia.icono,
+            })
 
-    def checar_insignias_por_evento(usuario, evento, quest=None):
+    def checar_insignias_por_evento(usuario, evento, quest=None, events=None):
         """Evalúa y otorga insignias según un evento usando los códigos nuevos."""
 
         # 1) Primer ahorro registrado
         if evento == "primer_movimiento":
             total_movs = Movimiento.query.filter_by(usuario_id=usuario.id, tipo="aporte").count()
             if total_movs == 1:
-                otorgar_insignia("PRIMER_AHORRO", usuario)
+                otorgar_insignia("PRIMER_AHORRO", usuario, events=events)
 
             # Insignia de ahorro total de $1000 o más
             total_ahorrado = (
@@ -1508,24 +1546,80 @@ def create_app():
                 .scalar() or 0
             )
             if total_ahorrado >= 1000:
-                otorgar_insignia("AHORRO_1000", usuario)
+                otorgar_insignia("AHORRO_1000", usuario, events=events)
 
         # 2) Primera meta creada
         elif evento == "primer_reto_creado":
             total_quests = Quest.query.filter_by(usuario_id=usuario.id).count()
             if total_quests == 1:
-                otorgar_insignia("PRIMERA_META", usuario)
+                otorgar_insignia("PRIMERA_META", usuario, events=events)
 
         # 3) Primer reto completado
         elif evento == "reto_completado" and quest is not None:
             # Siempre otorgar la épica
-            otorgar_insignia("PRIMER_RETO", usuario)
+            otorgar_insignia("PRIMER_RETO", usuario, events=events)
 
             # Meta cumplida a tiempo (antes o justo en fecha límite)
             if quest.fecha_limite and quest.monto_actual >= quest.monto_objetivo:
                 hoy = date.today()
                 if hoy <= quest.fecha_limite:
-                    otorgar_insignia("META_A_TIEMPO", usuario)
+                    otorgar_insignia("META_A_TIEMPO", usuario, events=events)
+
+    def procesar_registro_movimiento(usuario, quest, tipo, monto_float, nota, categoria, events=None):
+        """Registra un movimiento (aporte/retiro) sobre una meta: crea el Movimiento,
+        actualiza monto/estatus de la meta, recalcula la recompensa vía IA (con
+        fallback) y dispara premios (puntos, insignias, racha).
+
+        Comparte la lógica antes duplicada entre `nuevo_movimiento` y su alias
+        `crear_movimiento`, y la reutiliza también la API JSON. No hace commit;
+        el caller es responsable de eso.
+        """
+        rachas_antes = calcular_rachas_usuario(usuario)
+
+        movimiento = Movimiento(
+            tipo=tipo,
+            monto=monto_float,
+            nota=nota,
+            categoria=categoria,
+            usuario_id=usuario.id,
+            quest_id=quest.id,
+        )
+        db.session.add(movimiento)
+
+        if tipo == "aporte":
+            quest.monto_actual += monto_float
+        else:
+            quest.monto_actual -= monto_float
+
+        # Recalcular la recompensa contextual del reto antes de evaluar si se completa.
+        # Así, los puntos que se muestran y los que realmente se otorgan salen de la misma fuente.
+        try:
+            questy_input = construir_questy_input(usuario, quest)
+            questy_result = evaluate_quest(questy_input)
+            quest.puntos_recompensa = int(questy_result.puntos_finales or 0)
+        except Exception:
+            pass
+
+        # Actualizar estatus automáticamente
+        if quest.monto_actual >= quest.monto_objetivo and quest.estatus != "cancelado":
+            quest.monto_actual = quest.monto_objetivo
+            if quest.estatus != "completado":
+                quest.estatus = "completado"
+                otorgar_puntos_por_completado(quest, events=events)
+        elif quest.monto_actual > 0 and quest.estatus == "pendiente":
+            quest.estatus = "en_progreso"
+
+        # Insignia por primer movimiento (si aplica)
+        checar_insignias_por_evento(usuario, "primer_movimiento", events=events)
+
+        # Bonus por racha solo para aportes
+        if tipo == "aporte":
+            # Asegurar que el movimiento actual esté en la sesión al recalcular
+            db.session.flush()
+            rachas_despues = calcular_rachas_usuario(usuario)
+            otorgar_bonus_racha(usuario, rachas_antes, rachas_despues, events=events)
+
+        return movimiento
 
     # ----------------- Rutas de autenticación -----------------
 
@@ -1537,69 +1631,7 @@ def create_app():
             password = request.form.get("password", "")
             password2 = request.form.get("password2", "")
 
-            errores = []
-
-            # Validaciones básicas de requeridos
-            if not nombre:
-                errores.append("El nombre es obligatorio.")
-            if not correo:
-                errores.append("El correo es obligatorio.")
-            if not password:
-                errores.append("La contraseña es obligatoria.")
-            if password != password2:
-                errores.append("Las contraseñas no coinciden.")
-
-            # Longitudes máximas
-            if nombre and len(nombre) > 100:
-                errores.append("El nombre es demasiado largo (máximo 100 caracteres).")
-            if correo and len(correo) > 150:
-                errores.append("El correo es demasiado largo (máximo 150 caracteres).")
-            if password and len(password) > 128:
-                errores.append("La contraseña es demasiado larga (máximo 128 caracteres).")
-
-            # Validación estricta de formato de correo
-            if correo:
-                email_regex = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
-                if not re.match(email_regex, correo):
-                    errores.append("El correo no tiene un formato válido.")
-
-                # Validación extra de dominio/TLD (modo 'estricto')
-                allowed_tlds = (
-                    ".com",
-                    ".mx",
-                    ".com.mx",
-                    ".org",
-                    ".net",
-                    ".edu",
-                    ".gob.mx",
-                )
-                if not any(correo.endswith(tld) for tld in allowed_tlds):
-                    errores.append(
-                        "El dominio de correo no está permitido. Usa un correo con dominio común (.com, .mx, .org, .net, .edu, .gob.mx)."
-                    )
-
-            # Reglas de contraseña fuerte
-            if password:
-                if len(password) < 8:
-                    errores.append("La contraseña debe tener al menos 8 caracteres.")
-                if not any(c.islower() for c in password):
-                    errores.append("La contraseña debe incluir al menos una letra minúscula.")
-                if not any(c.isupper() for c in password):
-                    errores.append("La contraseña debe incluir al menos una letra mayúscula.")
-                if not any(c.isdigit() for c in password):
-                    errores.append("La contraseña debe incluir al menos un número.")
-
-                # No permitir que la contraseña sea igual al nombre o al correo
-                if nombre and password.lower() == nombre.lower():
-                    errores.append("La contraseña no puede ser igual a tu nombre.")
-                if correo and password.lower() == correo.lower():
-                    errores.append("La contraseña no puede ser igual a tu correo.")
-
-            # Verificar si ya existe usuario con ese correo
-            if correo and not errores:
-                existente = Usuario.query.filter_by(correo=correo).first()
-                if existente:
-                    errores.append("Ya existe una cuenta registrada con ese correo.")
+            errores = validar_registro(nombre, correo, password, password2)
 
             if errores:
                 for e in errores:
@@ -2029,31 +2061,7 @@ def create_app():
             metodo_pago = request.form.get("metodo_pago", "").strip()
             es_hormiga_flag = request.form.get("es_hormiga") == "on"
 
-            errores = []
-
-            # Validar monto
-            try:
-                monto = float(monto_str)
-                if monto <= 0:
-                    errores.append("El monto del gasto debe ser mayor a 0.")
-                if monto > 1_000_000_000:
-                    errores.append("El monto del gasto es demasiado grande.")
-            except ValueError:
-                errores.append("El monto del gasto no es válido.")
-
-            # Validar fecha (opcional, por defecto hoy)
-            if fecha_str:
-                try:
-                    fecha = datetime.strptime(fecha_str, "%Y-%m-%d").date()
-                except ValueError:
-                    errores.append("La fecha no tiene un formato válido (AAAA-MM-DD).")
-                    fecha = date.today()
-            else:
-                fecha = date.today()
-
-            # Validar descripción
-            if descripcion and len(descripcion) > 200:
-                errores.append("La descripción no puede superar 200 caracteres.")
+            errores, datos = validar_gasto(monto_str, descripcion, fecha_str)
 
             if errores:
                 for e in errores:
@@ -2074,7 +2082,7 @@ def create_app():
             es_hormiga = es_hormiga_flag
             if not es_hormiga_flag:
                 nombre_cat = (categoria.nombre or "").lower()
-                if monto <= 100 and any(
+                if datos["monto"] <= 100 and any(
                     x in nombre_cat
                     for x in ["comida", "caf", "snack", "antojo", "dulce"]
                 ):
@@ -2083,9 +2091,9 @@ def create_app():
             gasto = Gasto(
                 usuario_id=g.usuario_actual.id,
                 categoria_id=categoria.id,
-                monto=monto,
-                descripcion=descripcion or None,
-                fecha=fecha,
+                monto=datos["monto"],
+                descripcion=datos["descripcion"] or None,
+                fecha=datos["fecha"],
                 metodo_pago=metodo_pago or None,
                 es_hormiga=es_hormiga,
             )
@@ -2173,60 +2181,9 @@ def create_app():
             es_colaborativo = request.form.get("es_colaborativo") == "on"
             tipo = "colaborativo" if es_colaborativo else "individual"
 
-            errores = []
-
-            if not nombre:
-                errores.append("El nombre del reto es obligatorio.")
-            if not monto_objetivo:
-                errores.append("El monto objetivo es obligatorio.")
-            if not fecha_limite:
-                errores.append("La fecha límite es obligatoria.")
-
-            try:
-                monto_objetivo_float = float(monto_objetivo)
-                if monto_objetivo_float <= 0:
-                    errores.append("El monto objetivo debe ser mayor a 0.")
-            except ValueError:
-                errores.append("El monto objetivo debe ser un número válido.")
-
-            try:
-                monto_actual_float = float(monto_actual) if monto_actual else 0.0
-                if monto_actual_float < 0:
-                    errores.append("El monto actual no puede ser negativo.")
-            except ValueError:
-                errores.append("El monto actual debe ser un número válido.")
-
-            try:
-                fecha_limite_date = datetime.strptime(fecha_limite, "%Y-%m-%d").date()
-            except ValueError:
-                errores.append("La fecha límite no tiene un formato válido (AAAA-MM-DD).")
-
-            if tipo not in ["individual", "colaborativo"]:
-                errores.append("Tipo de reto no válido.")
-
-            # Validaciones adicionales de negocio para montos, texto y fechas
-            if nombre and len(nombre) > 100:
-                errores.append("El nombre del reto es demasiado largo (máximo 100 caracteres).")
-
-            if descripcion and len(descripcion) > 500:
-                errores.append("La descripción es demasiado larga (máximo 500 caracteres).")
-
-            # Validar montos máximos y coherencia entre monto actual y objetivo
-            if "monto_objetivo_float" in locals():
-                if monto_objetivo_float > 1_000_000_000:
-                    errores.append("El monto objetivo es demasiado grande.")
-            if "monto_actual_float" in locals() and "monto_objetivo_float" in locals():
-                if monto_actual_float > monto_objetivo_float:
-                    errores.append("El monto actual no puede ser mayor que el monto objetivo.")
-
-            # Validar fechas: no en el pasado y no excesivamente lejanas
-            if "fecha_limite_date" in locals():
-                hoy = date.today()
-                if fecha_limite_date < hoy:
-                    errores.append("La fecha límite no puede ser anterior a hoy.")
-                max_fecha = hoy + timedelta(days=365 * 10)
-                if fecha_limite_date > max_fecha:
-                    errores.append("La fecha límite es demasiado lejana (máximo 10 años desde hoy).")
+            errores, datos = validar_quest_form(
+                nombre, monto_objetivo, monto_actual, fecha_limite, descripcion, tipo
+            )
 
             if errores:
                 for e in errores:
@@ -2234,6 +2191,9 @@ def create_app():
                 hoy_iso = date.today().strftime("%Y-%m-%d")
                 return render_template("quests/form.html", modo="crear", hoy_iso=hoy_iso)
 
+            monto_objetivo_float = datos["monto_objetivo_float"]
+            monto_actual_float = datos["monto_actual_float"]
+            fecha_limite_date = datos["fecha_limite_date"]
             fecha_creacion = date.today()
 
             dificultad_calc = calcular_dificultad(
@@ -2341,66 +2301,18 @@ def create_app():
             tipo = "colaborativo" if es_colaborativo else "individual"
             cancelar = request.form.get("cancelar") == "on"
 
-            errores = []
-
-            if not nombre:
-                errores.append("El nombre del reto es obligatorio.")
-            if not monto_objetivo:
-                errores.append("El monto objetivo es obligatorio.")
-            if not fecha_limite:
-                errores.append("La fecha límite es obligatoria.")
-
-            try:
-                monto_objetivo_float = float(monto_objetivo)
-                if monto_objetivo_float <= 0:
-                    errores.append("El monto objetivo debe ser mayor a 0.")
-            except ValueError:
-                errores.append("El monto objetivo debe ser un número válido.")
-
-            try:
-                monto_actual_float = float(monto_actual) if monto_actual else 0.0
-                if monto_actual_float < 0:
-                    errores.append("El monto actual no puede ser negativo.")
-            except ValueError:
-                errores.append("El monto actual debe ser un número válido.")
-
-            try:
-                fecha_limite_date = datetime.strptime(fecha_limite, "%Y-%m-%d").date()
-            except ValueError:
-                errores.append("La fecha límite no tiene un formato válido (AAAA-MM-DD).")
-
-            if tipo not in ["individual", "colaborativo"]:
-                errores.append("Tipo de reto no válido.")
-
-            # Validaciones adicionales de negocio para montos, texto y fechas
-            if nombre and len(nombre) > 100:
-                errores.append("El nombre del reto es demasiado largo (máximo 100 caracteres).")
-
-            if descripcion and len(descripcion) > 500:
-                errores.append("La descripción es demasiado larga (máximo 500 caracteres).")
-
-            # Validar montos máximos y coherencia entre monto actual y objetivo
-            if "monto_objetivo_float" in locals():
-                if monto_objetivo_float > 1_000_000_000:
-                    errores.append("El monto objetivo es demasiado grande.")
-            if "monto_actual_float" in locals() and "monto_objetivo_float" in locals():
-                if monto_actual_float > monto_objetivo_float:
-                    errores.append("El monto actual no puede ser mayor que el monto objetivo.")
-
-            # Validar fechas: no en el pasado y no excesivamente lejanas
-            if "fecha_limite_date" in locals():
-                hoy = date.today()
-                if fecha_limite_date < hoy:
-                    errores.append("La fecha límite no puede ser anterior a hoy.")
-                max_fecha = hoy + timedelta(days=365 * 10)
-                if fecha_limite_date > max_fecha:
-                    errores.append("La fecha límite es demasiado lejana (máximo 10 años desde hoy).")
+            errores, datos = validar_quest_form(
+                nombre, monto_objetivo, monto_actual, fecha_limite, descripcion, tipo
+            )
 
             if errores:
                 for e in errores:
                     flash(e, "danger")
                 return render_template("quests/form.html", modo="editar", quest=quest, hoy_iso=hoy_iso)
 
+            monto_objetivo_float = datos["monto_objetivo_float"]
+            monto_actual_float = datos["monto_actual_float"]
+            fecha_limite_date = datos["fecha_limite_date"]
             fecha_creacion = quest.fecha_creacion or date.today()
 
             dificultad_calc = calcular_dificultad(
@@ -2507,114 +2419,23 @@ def create_app():
             abort(403)
 
         if request.method == "POST":
-            # Racha antes de registrar el nuevo movimiento
-            rachas_antes = calcular_rachas_usuario(g.usuario_actual)
-
-            # Stricter sanitized version for reading form fields
-            tipo = request.form.get("tipo", "").strip().lower()
-            monto = request.form.get("monto", "").strip()
-            nota = request.form.get("nota", "").strip()
-            categoria = request.form.get("categoria", "general").strip().lower()
-
-            # Sanitización adicional
-            if nota and len(nota) > 500:
-                nota = nota[:500]
-
-            # Improved stricter validation block
-            errores = []
-
-            # Validar tipo estrictamente
-            if tipo not in ["aporte", "retiro"]:
-                errores.append("Tipo de movimiento no válido.")
-
-            # Validar monto estrictamente
-            try:
-                monto_float = float(monto)
-                if monto_float <= 0:
-                    errores.append("El monto debe ser mayor a 0.")
-                if monto_float > 1_000_000_000:
-                    errores.append("El monto es demasiado grande.")
-            except (TypeError, ValueError):
-                errores.append("Monto inválido.")
-
-            # Validar longitud de nota
-            if nota and len(nota) > 500:
-                errores.append("La nota no puede superar 500 caracteres.")
-
-            # Normalizar categoría (opcional, por si viene vacía)
-            categorias_validas = {
-                "general",
-                "salario",
-                "ahorro_programado",
-                "extra",
-                "comida",
-                "transporte",
-                "entretenimiento",
-                "viaje",
-                "regalos",
-                "salud",
-                "otros",
-            }
-            if not categoria:
-                categoria = "general"
-            elif categoria not in categorias_validas:
-                categoria = "otros"
-
-            # Validar retiros
-            if not errores and tipo == "retiro":
-                if monto_float > quest.monto_actual:
-                    errores.append("No puedes retirar más de lo que tienes ahorrado en este reto.")
-                if quest.estatus == "completado":
-                    errores.append("No puedes retirar en un reto ya completado.")
+            errores, datos = validar_movimiento(
+                request.form.get("tipo", ""),
+                request.form.get("monto", ""),
+                request.form.get("nota", ""),
+                request.form.get("categoria", "general"),
+                quest,
+            )
 
             if errores:
                 for e in errores:
                     flash(e, "danger")
                 return render_template("movimientos/form.html", quest=quest)
 
-            movimiento = Movimiento(
-                tipo=tipo,
-                monto=monto_float,
-                nota=nota,
-                categoria=categoria,
-                usuario_id=g.usuario_actual.id,
-                quest_id=quest.id,
+            procesar_registro_movimiento(
+                g.usuario_actual, quest,
+                datos["tipo"], datos["monto_float"], datos["nota"], datos["categoria"],
             )
-            db.session.add(movimiento)
-
-            if tipo == "aporte":
-                quest.monto_actual += monto_float
-            else:
-                quest.monto_actual -= monto_float
-
-            # Recalcular la recompensa contextual del reto antes de evaluar si se completa.
-            # Así, los puntos que se muestran y los que realmente se otorgan salen de la misma fuente.
-            try:
-                questy_input = construir_questy_input(g.usuario_actual, quest)
-                questy_result = evaluate_quest(questy_input)
-                quest.puntos_recompensa = int(questy_result.puntos_finales or 0)
-            except Exception:
-                pass
-
-            # Actualizar estatus automáticamente
-            if quest.monto_actual >= quest.monto_objetivo and quest.estatus != "cancelado":
-                quest.monto_actual = quest.monto_objetivo
-                if quest.estatus != "completado":
-                    quest.estatus = "completado"
-                    otorgar_puntos_por_completado(quest)
-            elif quest.monto_actual > 0 and quest.estatus == "pendiente":
-                quest.estatus = "en_progreso"
-
-            # Insignia por primer movimiento (si aplica)
-            checar_insignias_por_evento(g.usuario_actual, "primer_movimiento")
-
-            # Bonus por racha solo para aportes
-            if tipo == "aporte":
-                # Asegurar que el movimiento actual esté en la sesión al recalcular
-                db.session.flush()
-                rachas_despues = calcular_rachas_usuario(g.usuario_actual)
-                otorgar_bonus_racha(g.usuario_actual, rachas_antes, rachas_despues)
-
             db.session.commit()
 
             flash("Movimiento registrado correctamente.", "success")
@@ -2633,113 +2454,23 @@ def create_app():
             abort(403)
 
         if request.method == "POST":
-            # Racha antes de registrar el nuevo movimiento
-            rachas_antes = calcular_rachas_usuario(g.usuario_actual)
-
-            # Stricter sanitized version for reading form fields
-            tipo = request.form.get("tipo", "").strip().lower()
-            monto = request.form.get("monto", "").strip()
-            nota = request.form.get("nota", "").strip()
-            categoria = request.form.get("categoria", "general").strip().lower()
-
-            # Sanitización adicional
-            if nota and len(nota) > 500:
-                nota = nota[:500]
-
-            # Improved stricter validation block
-            errores = []
-
-            # Validar tipo estrictamente
-            if tipo not in ["aporte", "retiro"]:
-                errores.append("Tipo de movimiento no válido.")
-
-            # Validar monto estrictamente
-            try:
-                monto_float = float(monto)
-                if monto_float <= 0:
-                    errores.append("El monto debe ser mayor a 0.")
-                if monto_float > 1_000_000_000:
-                    errores.append("El monto es demasiado grande.")
-            except (TypeError, ValueError):
-                errores.append("Monto inválido.")
-
-            # Validar longitud de nota
-            if nota and len(nota) > 500:
-                errores.append("La nota no puede superar 500 caracteres.")
-
-            # Normalizar categoría (opcional, por si viene vacía)
-            categorias_validas = {
-                "general",
-                "salario",
-                "ahorro_programado",
-                "extra",
-                "comida",
-                "transporte",
-                "entretenimiento",
-                "viaje",
-                "regalos",
-                "salud",
-                "otros",
-            }
-            if not categoria:
-                categoria = "general"
-            elif categoria not in categorias_validas:
-                categoria = "otros"
-
-            # Validar retiros
-            if not errores and tipo == "retiro":
-                if monto_float > quest.monto_actual:
-                    errores.append("No puedes retirar más de lo que tienes ahorrado en este reto.")
-                if quest.estatus == "completado":
-                    errores.append("No puedes retirar en un reto ya completado.")
+            errores, datos = validar_movimiento(
+                request.form.get("tipo", ""),
+                request.form.get("monto", ""),
+                request.form.get("nota", ""),
+                request.form.get("categoria", "general"),
+                quest,
+            )
 
             if errores:
                 for e in errores:
                     flash(e, "danger")
                 return render_template("movimientos/form.html", quest=quest)
 
-            movimiento = Movimiento(
-                tipo=tipo,
-                monto=monto_float,
-                nota=nota,
-                categoria=categoria,
-                usuario_id=g.usuario_actual.id,
-                quest_id=quest.id,
+            procesar_registro_movimiento(
+                g.usuario_actual, quest,
+                datos["tipo"], datos["monto_float"], datos["nota"], datos["categoria"],
             )
-            db.session.add(movimiento)
-
-            if tipo == "aporte":
-                quest.monto_actual += monto_float
-            else:
-                quest.monto_actual -= monto_float
-
-            # Recalcular la recompensa contextual del reto antes de evaluar si se completa.
-            # Así, los puntos que se muestran y los que realmente se otorgan salen de la misma fuente.
-            try:
-                questy_input = construir_questy_input(g.usuario_actual, quest)
-                questy_result = evaluate_quest(questy_input)
-                quest.puntos_recompensa = int(questy_result.puntos_finales or 0)
-            except Exception:
-                pass
-
-            # Actualizar estatus automáticamente
-            if quest.monto_actual >= quest.monto_objetivo and quest.estatus != "cancelado":
-                quest.monto_actual = quest.monto_objetivo
-                if quest.estatus != "completado":
-                    quest.estatus = "completado"
-                    otorgar_puntos_por_completado(quest)
-            elif quest.monto_actual > 0 and quest.estatus == "pendiente":
-                quest.estatus = "en_progreso"
-
-            # Insignia por primer movimiento (si aplica)
-            checar_insignias_por_evento(g.usuario_actual, "primer_movimiento")
-
-            # Bonus por racha solo para aportes
-            if tipo == "aporte":
-                db.session.flush()
-                rachas_despues = calcular_rachas_usuario(g.usuario_actual)
-                otorgar_bonus_racha(g.usuario_actual, rachas_antes, rachas_despues)
-
             db.session.commit()
 
             flash("Movimiento registrado correctamente.", "success")
@@ -2897,6 +2628,30 @@ def create_app():
             usuario=usuario,
             tema_actual=tema_actual
         )
+
+    # ----------------- API JSON para la app móvil (/api/v1) -----------------
+    api_ctx = {
+        "PROFILE_RANKS": PROFILE_RANKS,
+        "calcular_estado_rango_perfil": calcular_estado_rango_perfil,
+        "obtener_quests_usuario": obtener_quests_usuario,
+        "usuario_participa_en_quest": usuario_participa_en_quest,
+        "generar_notificaciones": generar_notificaciones,
+        "calcular_dificultad": calcular_dificultad,
+        "calcular_puntos_quest": calcular_puntos_quest,
+        "checar_insignias_por_evento": checar_insignias_por_evento,
+        "calcular_rachas_usuario": calcular_rachas_usuario,
+        "construir_questy_input": construir_questy_input,
+        "analizar_habitos_ahorro": analizar_habitos_ahorro,
+        "resumen_gastos_para_ia": resumen_gastos_para_ia,
+        "generar_resumen_questy_usuario": generar_resumen_questy_usuario,
+        "humanizar_segmento_questy": humanizar_segmento_questy,
+        "obtener_o_crear_categoria_gasto": obtener_o_crear_categoria_gasto,
+        "procesar_registro_movimiento": procesar_registro_movimiento,
+        "intentos_login": intentos_login,
+        "MAX_LOGIN_INTENTOS": MAX_LOGIN_INTENTOS,
+        "BLOQUEO_MINUTOS": BLOQUEO_MINUTOS,
+    }
+    register_api(app, csrf, api_ctx)
 
     # Crear tablas + insignias base al finalizar la configuración de la app
     with app.app_context():
