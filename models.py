@@ -63,6 +63,9 @@ class Quest(db.Model):
     # individual o colaborativo
     tipo = db.Column(db.String(20), nullable=False, default="individual")
 
+    # Ícono elegido por el usuario (nombre de Ionicons), usado por la app móvil
+    icono = db.Column(db.String(30), nullable=True)
+
     # FK al usuario creador del reto
     usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
     usuario = db.relationship("Usuario", back_populates="quests")
@@ -193,6 +196,38 @@ class Gasto(db.Model):
 
     usuario = db.relationship("Usuario", backref="gastos")
     categoria = db.relationship("CategoriaGasto", back_populates="gastos")
+
+    def __repr__(self):
+        return f"<Gasto {self.monto} {self.categoria_id} {self.fecha}>"
+
+
+class Notificacion(db.Model):
+    """Notificaciones persistidas, disparadas por eventos reales (meta
+    completada, insignia nueva, aporte de un colaborador). Las notificaciones
+    de reglas dinámicas (recordatorios de vencimiento, consejos de gasto)
+    siguen generándose al vuelo en generar_notificaciones() y no se guardan
+    aquí, para no duplicar filas cada vez que se recalculan."""
+    __tablename__ = "notificaciones"
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+
+    # meta_completada | aporte_colaborador | insignia_nueva
+    tipo = db.Column(db.String(30), nullable=False)
+
+    titulo = db.Column(db.String(100), nullable=False)
+    mensaje = db.Column(db.Text, nullable=False)
+    icono = db.Column(db.String(30), nullable=True)
+    color = db.Column(db.String(20), nullable=True)
+
+    leida = db.Column(db.Boolean, nullable=False, default=False)
+
+    quest_id = db.Column(db.Integer, db.ForeignKey("quests.id"), nullable=True)
+
+    fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+
+    usuario = db.relationship("Usuario")
+    quest = db.relationship("Quest")
 
     def __repr__(self):
         return f"<Gasto {self.monto} {self.categoria_id} {self.fecha}>"

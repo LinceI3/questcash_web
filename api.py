@@ -20,6 +20,7 @@ from models import (
     Gasto,
     Insignia,
     Movimiento,
+    Notificacion,
     ParticipacionQuest,
     Quest,
     Usuario,
@@ -29,6 +30,15 @@ from models import (
 from validators import validar_gasto, validar_movimiento, validar_quest_form, validar_registro
 
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+
+ICONOS_META_PERMITIDOS = {
+    "airplane", "bicycle", "laptop", "shield-checkmark", "home",
+    "school", "heart", "wallet", "car-sport", "game-controller", "fitness",
+}
+
+CATEGORY_COLOR_PALETTE = [
+    "#2563EB", "#4ADE80", "#FBBF24", "#8B5CF6", "#F97316", "#EC4899", "#14B8A6", "#D1D5DB",
+]
 
 
 def serialize_user(usuario):
@@ -62,6 +72,7 @@ def serialize_quest(quest):
         "es_colaborativo": quest.es_colaborativo,
         "usuario_id": quest.usuario_id,
         "progreso_porcentaje": quest.progreso_porcentaje(),
+        "icono": quest.icono,
     }
 
 
@@ -116,6 +127,41 @@ def serialize_participacion(participacion):
             "nombre": participacion.usuario.nombre,
             "correo": participacion.usuario.correo,
         },
+    }
+
+
+def serialize_notificacion(notif):
+    """Notificación persistida (evento real: meta completada, insignia,
+    aporte de colaborador)."""
+    return {
+        "id": notif.id,
+        "tipo": notif.tipo,
+        "severidad": None,
+        "titulo": notif.titulo,
+        "mensaje": notif.mensaje,
+        "icono": notif.icono,
+        "color": notif.color,
+        "leida": notif.leida,
+        "quest_id": notif.quest_id,
+        "fecha": notif.fecha_creacion.isoformat() if notif.fecha_creacion else None,
+    }
+
+
+def serialize_notificacion_dinamica(item):
+    """Notificación calculada al vuelo por generar_notificaciones() (app.py) —
+    recordatorios de vencimiento y consejos de gasto. No tiene id persistido
+    ni estado de lectura real, así que se marca siempre como leída."""
+    return {
+        "id": None,
+        "tipo": item.get("categoria", "recordatorio"),
+        "severidad": item.get("tipo"),
+        "titulo": item.get("titulo", "Aviso"),
+        "mensaje": item.get("mensaje"),
+        "icono": item.get("icono"),
+        "color": item.get("color"),
+        "leida": True,
+        "quest_id": item.get("quest_id"),
+        "fecha": None,
     }
 
 
@@ -294,7 +340,7 @@ def register_api(app, csrf, ctx):
             .all()
         )
 
-        notificaciones = generar_notificaciones(usuario)
+        notificaciones = [serialize_notificacion_dinamica(item) for item in generar_notificaciones(usuario)]
         rachas = calcular_rachas_usuario(usuario)
 
         insignias_count = UsuarioInsignia.query.filter_by(usuario_id=usuario.id).count()
@@ -338,6 +384,8 @@ def register_api(app, csrf, ctx):
         fecha_limite = (data.get("fecha_limite") or "").strip()
         es_colaborativo = bool(data.get("es_colaborativo"))
         tipo = "colaborativo" if es_colaborativo else "individual"
+        icono_raw = (data.get("icono") or "").strip()
+        icono = icono_raw if icono_raw in ICONOS_META_PERMITIDOS else None
 
         errores, datos = validar_quest_form(
             nombre, monto_objetivo, monto_actual, fecha_limite, descripcion, tipo
@@ -367,6 +415,7 @@ def register_api(app, csrf, ctx):
             usuario_id=usuario.id,
             es_colaborativo=es_colaborativo,
             tipo=tipo,
+            icono=icono,
         )
         db.session.add(nueva_quest)
         db.session.flush()
@@ -446,6 +495,10 @@ def register_api(app, csrf, ctx):
             datos["monto_objetivo_float"], datos["fecha_limite_date"], dificultad_calc, tipo,
             fecha_creacion=fecha_creacion,
         )
+
+        icono_raw = (data.get("icono") or "").strip()
+        if icono_raw in ICONOS_META_PERMITIDOS:
+            quest.icono = icono_raw
 
         quest.nombre = nombre
         quest.descripcion = descripcion
@@ -611,20 +664,85 @@ def register_api(app, csrf, ctx):
 
     # ----------------- Gastos -----------------
 
+    def _rango_periodo(period):
+        """Devuelve (inicio, fin, inicio_anterior, fin_anterior) para el
+        período pedido, comparado contra el período inmediato anterior de
+        igual duración (semana pasada / mes pasado / año pasado)."""
+        hoy = date.today()
+        if period == "week":
+            inicio = hoy - timedelta(days=hoy.weekday())
+            fin_anterior = inicio - timedelta(days=1)
+            inicio_anterior = fin_anterior - timedelta(days=6)
+        elif period == "year":
+            inicio = hoy.replace(month=1, day=1)
+            inicio_anterior = inicio.replace(year=inicio.year - 1)
+            fin_anterior = inicio - timedelta(days=1)
+        else:
+            inicio = hoy.replace(day=1)
+            fin_anterior = inicio - timedelta(days=1)
+            inicio_anterior = fin_anterior.replace(day=1)
+        return inicio, hoy, inicio_anterior, fin_anterior
+
     @api_bp.route("/gastos", methods=["GET"])
     @jwt_required
     def api_listar_gastos():
         usuario = g.api_usuario
-        hoy = date.today()
-        inicio_mes = hoy.replace(day=1)
+        period = request.args.get("period", "month")
+        if period not in ("week", "month", "year"):
+            period = "month"
+
+        inicio, fin, inicio_anterior, fin_anterior = _rango_periodo(period)
+
         gastos = (
             Gasto.query
-            .filter(Gasto.usuario_id == usuario.id, Gasto.fecha >= inicio_mes, Gasto.fecha <= hoy)
+            .filter(Gasto.usuario_id == usuario.id, Gasto.fecha >= inicio, Gasto.fecha <= fin)
             .order_by(Gasto.fecha.desc())
             .all()
         )
-        total_mes = sum(gasto.monto for gasto in gastos) or 0
-        return jsonify({"gastos": [serialize_gasto(gasto) for gasto in gastos], "total_mes": total_mes})
+        total_periodo = sum(gasto.monto for gasto in gastos) or 0.0
+
+        total_anterior = (
+            db.session.query(db.func.sum(Gasto.monto))
+            .filter(
+                Gasto.usuario_id == usuario.id,
+                Gasto.fecha >= inicio_anterior,
+                Gasto.fecha <= fin_anterior,
+            )
+            .scalar() or 0.0
+        )
+        variacion_pct = (
+            ((total_periodo - total_anterior) / total_anterior * 100) if total_anterior > 0 else 0.0
+        )
+
+        por_categoria = {}
+        color_por_categoria = {}
+        for gasto in gastos:
+            nombre = gasto.categoria.nombre if gasto.categoria else "Otros"
+            por_categoria[nombre] = por_categoria.get(nombre, 0.0) + gasto.monto
+            if gasto.categoria and gasto.categoria.color:
+                color_por_categoria[nombre] = gasto.categoria.color
+
+        categorias = []
+        for idx, (nombre, monto) in enumerate(sorted(por_categoria.items(), key=lambda item: -item[1])):
+            color = color_por_categoria.get(nombre) or CATEGORY_COLOR_PALETTE[idx % len(CATEGORY_COLOR_PALETTE)]
+            porcentaje = round((monto / total_periodo * 100), 1) if total_periodo > 0 else 0.0
+            categorias.append({"nombre": nombre, "monto": monto, "porcentaje": porcentaje, "color": color})
+
+        return jsonify({
+            "gastos": [serialize_gasto(gasto) for gasto in gastos],
+            "period": period,
+            "total_periodo": total_periodo,
+            "categorias": categorias,
+            "variacion_pct_vs_periodo_anterior": round(variacion_pct, 1),
+        })
+
+    @api_bp.route("/categorias-gasto", methods=["GET"])
+    @jwt_required
+    def api_listar_categorias_gasto():
+        categorias = CategoriaGasto.query.order_by(CategoriaGasto.nombre).all()
+        return jsonify({
+            "categorias": [{"id": c.id, "nombre": c.nombre, "color": c.color} for c in categorias]
+        })
 
     @api_bp.route("/gastos", methods=["POST"])
     @jwt_required
@@ -702,9 +820,35 @@ def register_api(app, csrf, ctx):
     @api_bp.route("/notificaciones", methods=["GET"])
     @jwt_required
     def api_notificaciones():
-        return jsonify({"notificaciones": generar_notificaciones(g.api_usuario)})
+        usuario = g.api_usuario
+        persistidas = (
+            Notificacion.query
+            .filter_by(usuario_id=usuario.id)
+            .order_by(Notificacion.fecha_creacion.desc())
+            .limit(50)
+            .all()
+        )
+        dinamicas = generar_notificaciones(usuario)
 
-    # ----------------- Perfil (solo lectura por ahora) -----------------
+        items = [serialize_notificacion(n) for n in persistidas]
+        items += [serialize_notificacion_dinamica(item) for item in dinamicas]
+        no_leidas_count = sum(1 for n in persistidas if not n.leida)
+
+        return jsonify({"notificaciones": items, "no_leidas_count": no_leidas_count})
+
+    @api_bp.route("/notificaciones/<int:notif_id>/leer", methods=["POST"])
+    @jwt_required
+    def api_marcar_notificacion_leida(notif_id):
+        usuario = g.api_usuario
+        notif = Notificacion.query.get(notif_id)
+        if notif is None or notif.usuario_id != usuario.id:
+            return jsonify({"error": "not_found"}), 404
+
+        notif.leida = True
+        db.session.commit()
+        return jsonify({"notificacion": serialize_notificacion(notif)})
+
+    # ----------------- Perfil -----------------
 
     @api_bp.route("/perfil", methods=["GET"])
     @jwt_required
@@ -714,6 +858,39 @@ def register_api(app, csrf, ctx):
             "user": serialize_user(usuario),
             "rank_state": _augment_rank_state(calcular_estado_rango_perfil(usuario.puntos_totales or 0)),
         })
+
+    @api_bp.route("/perfil", methods=["PATCH"])
+    @jwt_required
+    def api_actualizar_perfil():
+        usuario = g.api_usuario
+        data = request.get_json(silent=True) or {}
+
+        nombre = (data.get("nombre") if "nombre" in data else usuario.nombre) or ""
+        nombre = nombre.strip()
+        alias = (data.get("alias") or "").strip() if "alias" in data else usuario.alias
+
+        errores = []
+        if not nombre:
+            errores.append("El nombre es obligatorio.")
+        elif len(nombre) > 100:
+            errores.append("El nombre es demasiado largo (máximo 100 caracteres).")
+        if alias and len(alias) > 50:
+            errores.append("El alias no puede superar 50 caracteres.")
+
+        if errores:
+            return jsonify({"errors": errores}), 400
+
+        usuario.nombre = nombre
+        usuario.alias = alias or None
+        if "notif_ia" in data:
+            usuario.notif_ia = bool(data["notif_ia"])
+        if "notif_fechas" in data:
+            usuario.notif_fechas = bool(data["notif_fechas"])
+        if "notif_progreso" in data:
+            usuario.notif_progreso = bool(data["notif_progreso"])
+
+        db.session.commit()
+        return jsonify({"user": serialize_user(usuario)})
 
     app.register_blueprint(api_bp)
     csrf.exempt(api_bp)
