@@ -23,8 +23,10 @@ from flask_wtf.csrf import generate_csrf
 from flask_migrate import Migrate
 
 from config import Config
+from crypto_utils import indice_ciego
 from models import (
     db,
+    InvitacionQuest,
     Quest,
     Usuario,
     Movimiento,
@@ -2760,41 +2762,58 @@ def create_app():
                 if not re.match(email_regex, correo):
                     errores.append("El correo no tiene un formato válido.")
 
-            # 3) Validar existencia en la base de datos y reglas de negocio
+            # 3) Reglas de negocio.
+            #
+            # NO se comprueba si la cuenta existe. Antes sí, y la respuesta
+            # "No existe un usuario registrado con ese correo" convertía este
+            # formulario en un oráculo para averiguar quién tiene cuenta en
+            # QuestCash. La invitación se registra en los dos casos.
+            bi = indice_ciego(correo)
+            if not errores and bi == g.usuario_actual.correo_bi:
+                errores.append("No puedes invitarte a ti mismo.")
+
             if not errores:
-                usuario_invitado = Usuario.por_correo(correo)
-                if not usuario_invitado:
-                    errores.append("No existe un usuario registrado con ese correo.")
-                elif usuario_invitado.id == quest.usuario_id:
-                    errores.append("Tú ya eres el creador de este reto.")
-                else:
-                    ya_participa = ParticipacionQuest.query.filter_by(
-                        usuario_id=usuario_invitado.id,
-                        quest_id=quest.id
-                    ).first()
-                    if ya_participa:
-                        errores.append("Ese usuario ya participa en este reto.")
+                ya_participa = (
+                    ParticipacionQuest.query
+                    .join(Usuario, ParticipacionQuest.usuario_id == Usuario.id)
+                    .filter(ParticipacionQuest.quest_id == quest.id, Usuario.correo_bi == bi)
+                    .first()
+                )
+                if ya_participa:
+                    errores.append("Esa persona ya participa en este reto.")
 
             if errores:
                 for e in errores:
                     flash(e, "danger")
             else:
-                nueva_part = ParticipacionQuest(
-                    usuario_id=usuario_invitado.id,
-                    quest_id=quest.id,
-                    rol="colaborador",
+                pendiente = InvitacionQuest.query.filter_by(
+                    quest_id=quest.id, correo_bi=bi, estado=InvitacionQuest.PENDIENTE
+                ).first()
+                if pendiente is None:
+                    invitacion = InvitacionQuest(
+                        quest_id=quest.id, invitado_por_id=g.usuario_actual.id
+                    )
+                    invitacion.set_correo(correo)
+                    db.session.add(invitacion)
+                    db.session.commit()
+                # Mismo mensaje exista o no la cuenta, y exista o no ya una
+                # invitación pendiente: es lo que cierra la enumeración.
+                flash(
+                    "Invitación enviada. Aparecerá en el reto cuando la persona la acepte.",
+                    "success",
                 )
-                db.session.add(nueva_part)
-                db.session.commit()
-                flash(f"Se ha añadido a {usuario_invitado.nombre} como colaborador.", "success")
 
             return redirect(url_for("gestionar_colaboradores", quest_id=quest.id))
 
         participaciones = ParticipacionQuest.query.filter_by(quest_id=quest.id).all()
+        invitaciones_pendientes = InvitacionQuest.query.filter_by(
+            quest_id=quest.id, estado=InvitacionQuest.PENDIENTE
+        ).order_by(InvitacionQuest.creado_en.desc()).all()
         return render_template(
             "quests/colaboradores.html",
             quest=quest,
-            participaciones=participaciones
+            participaciones=participaciones,
+            invitaciones_pendientes=invitaciones_pendientes,
         )
 
     @app.route("/perfil", methods=["GET", "POST"])

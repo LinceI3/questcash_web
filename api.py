@@ -24,8 +24,10 @@ from auth_jwt import (
     revocar_todas_las_sesiones,
 )
 from ia.services.questy_engine import evaluate_quest
+from crypto_utils import indice_ciego
 from models import (
     CategoriaGasto,
+    InvitacionQuest,
     Sesion,
     Gasto,
     Insignia,
@@ -147,6 +149,34 @@ def serialize_participacion(participacion):
             "alias": usuario.alias,
         },
     }
+
+
+def serialize_invitacion(invitacion, para_creador=False):
+    """Una invitación vista por el creador o por el invitado.
+
+    Al invitado no se le manda el correo: ya sabe cuál es el suyo, y evitarlo
+    quita una copia de un dato personal viajando sin necesidad.
+    """
+    datos = {
+        "id": invitacion.id,
+        "estado": invitacion.estado,
+        "creada": invitacion.creado_en.isoformat() if invitacion.creado_en else None,
+        "respondida": invitacion.respondida_en.isoformat() if invitacion.respondida_en else None,
+        "quest": {
+            "id": invitacion.quest.id,
+            "nombre": invitacion.quest.nombre,
+            "monto_objetivo": invitacion.quest.monto_objetivo,
+            "fecha_limite": invitacion.quest.fecha_limite.isoformat() if invitacion.quest.fecha_limite else None,
+            "icono": invitacion.quest.icono,
+        },
+        "invitado_por": {
+            "id": invitacion.invitado_por.id,
+            "nombre": invitacion.invitado_por.nombre,
+        },
+    }
+    if para_creador:
+        datos["correo"] = invitacion.correo
+    return datos
 
 
 def serialize_notificacion(notif):
@@ -739,6 +769,19 @@ def register_api(app, csrf, ctx):
     @api_bp.route("/quests/<int:quest_id>/colaboradores", methods=["POST"])
     @jwt_required
     def api_invitar_colaborador(quest_id):
+        """Registra una invitación. NO añade a nadie a la meta.
+
+        Dos problemas del comportamiento anterior:
+
+        1. Consentimiento. Se creaba la participación directamente, así que la
+           persona quedaba dentro de una meta ajena sin aceptar nada y sin
+           poder salirse.
+        2. Enumeración. Respondía "no existe un usuario registrado con ese
+           correo", lo que permitía averiguar si una dirección tenía cuenta.
+
+        Ahora la invitación se registra exista o no la cuenta, y la respuesta
+        es idéntica en los dos casos.
+        """
         usuario = g.api_usuario
         quest = _load_quest(quest_id)
         if quest is None:
@@ -758,29 +801,126 @@ def register_api(app, csrf, ctx):
             errores.append("El correo es demasiado largo (máximo 150 caracteres).")
         elif not re.match(EMAIL_REGEX, correo):
             errores.append("El correo no tiene un formato válido.")
-
-        usuario_invitado = None
-        if not errores:
-            usuario_invitado = Usuario.por_correo(correo)
-            if not usuario_invitado:
-                errores.append("No existe un usuario registrado con ese correo.")
-            elif usuario_invitado.id == quest.usuario_id:
-                errores.append("Tú ya eres el creador de este reto.")
-            else:
-                ya_participa = ParticipacionQuest.query.filter_by(
-                    usuario_id=usuario_invitado.id, quest_id=quest.id
-                ).first()
-                if ya_participa:
-                    errores.append("Ese usuario ya participa en este reto.")
-
+        elif indice_ciego(correo) == usuario.correo_bi:
+            errores.append("No puedes invitarte a ti mismo.")
         if errores:
             return jsonify({"errors": errores}), 400
 
-        nueva_part = ParticipacionQuest(usuario_id=usuario_invitado.id, quest_id=quest.id, rol="colaborador")
-        db.session.add(nueva_part)
+        bi = indice_ciego(correo)
+
+        # Si ya participa, se dice — no es enumeración: el creador ya ve a sus
+        # participantes en el listado de la meta.
+        ya_dentro = (
+            ParticipacionQuest.query
+            .join(Usuario, ParticipacionQuest.usuario_id == Usuario.id)
+            .filter(ParticipacionQuest.quest_id == quest.id, Usuario.correo_bi == bi)
+            .first()
+        )
+        if ya_dentro:
+            return jsonify({"errors": ["Esa persona ya participa en este reto."]}), 400
+
+        existente = InvitacionQuest.query.filter_by(
+            quest_id=quest.id, correo_bi=bi, estado=InvitacionQuest.PENDIENTE
+        ).first()
+        if existente:
+            # Reenviar una invitación pendiente no es un error.
+            return jsonify({"invitacion": serialize_invitacion(existente, para_creador=True)}), 200
+
+        invitacion = InvitacionQuest(quest_id=quest.id, invitado_por_id=usuario.id)
+        invitacion.set_correo(correo)
+        db.session.add(invitacion)
         db.session.commit()
 
-        return jsonify({"participacion": serialize_participacion(nueva_part)}), 201
+        return jsonify({"invitacion": serialize_invitacion(invitacion, para_creador=True)}), 201
+
+    @api_bp.route("/quests/<int:quest_id>/invitaciones", methods=["GET"])
+    @jwt_required
+    def api_listar_invitaciones_quest(quest_id):
+        """Invitaciones pendientes de una meta. Solo para el creador."""
+        quest = _load_quest(quest_id)
+        if quest is None:
+            return jsonify({"error": "not_found"}), 404
+        if quest.usuario_id != g.api_usuario.id:
+            return jsonify({"error": "forbidden"}), 403
+
+        pendientes = InvitacionQuest.query.filter_by(
+            quest_id=quest.id, estado=InvitacionQuest.PENDIENTE
+        ).order_by(InvitacionQuest.creado_en.desc()).all()
+        return jsonify({"invitaciones": [serialize_invitacion(i, para_creador=True) for i in pendientes]})
+
+    @api_bp.route("/invitaciones", methods=["GET"])
+    @jwt_required
+    def api_mis_invitaciones():
+        """Invitaciones pendientes dirigidas a mí, buscadas por índice ciego."""
+        usuario = g.api_usuario
+        pendientes = (
+            InvitacionQuest.query
+            .filter_by(correo_bi=usuario.correo_bi, estado=InvitacionQuest.PENDIENTE)
+            .order_by(InvitacionQuest.creado_en.desc())
+            .all()
+        )
+        return jsonify({"invitaciones": [serialize_invitacion(i) for i in pendientes]})
+
+    def _responder_invitacion(invitacion_id, aceptar):
+        usuario = g.api_usuario
+        invitacion = InvitacionQuest.query.get(invitacion_id)
+
+        # Comprobar la propiedad ANTES que el estado: responder distinto según
+        # exista o no la invitación volvería a filtrar información.
+        if invitacion is None or invitacion.correo_bi != usuario.correo_bi:
+            return jsonify({"error": "not_found"}), 404
+        if invitacion.estado != InvitacionQuest.PENDIENTE:
+            return jsonify({"error": "already_answered"}), 409
+
+        invitacion.estado = InvitacionQuest.ACEPTADA if aceptar else InvitacionQuest.RECHAZADA
+        invitacion.respondida_en = datetime.now(timezone.utc)
+
+        if aceptar:
+            ya = ParticipacionQuest.query.filter_by(
+                usuario_id=usuario.id, quest_id=invitacion.quest_id
+            ).first()
+            if not ya:
+                db.session.add(ParticipacionQuest(
+                    usuario_id=usuario.id, quest_id=invitacion.quest_id, rol="colaborador"
+                ))
+        db.session.commit()
+        return jsonify({"invitacion": serialize_invitacion(invitacion)})
+
+    @api_bp.route("/invitaciones/<int:invitacion_id>/aceptar", methods=["POST"])
+    @jwt_required
+    def api_aceptar_invitacion(invitacion_id):
+        return _responder_invitacion(invitacion_id, True)
+
+    @api_bp.route("/invitaciones/<int:invitacion_id>/rechazar", methods=["POST"])
+    @jwt_required
+    def api_rechazar_invitacion(invitacion_id):
+        return _responder_invitacion(invitacion_id, False)
+
+    @api_bp.route("/quests/<int:quest_id>/abandonar", methods=["POST"])
+    @jwt_required
+    def api_abandonar_quest(quest_id):
+        """Salir de una meta colaborativa.
+
+        No existía. Quien entraba a una meta ajena —antes sin ni siquiera
+        aceptar— no tenía forma de salir. Los aportes ya hechos se conservan:
+        son movimientos reales de esa meta, no del participante.
+        """
+        usuario = g.api_usuario
+        quest = _load_quest(quest_id)
+        if quest is None:
+            return jsonify({"error": "not_found"}), 404
+        if quest.usuario_id == usuario.id:
+            return jsonify({"error": "creator_cannot_leave"}), 400
+
+        participacion = ParticipacionQuest.query.filter_by(
+            usuario_id=usuario.id, quest_id=quest.id
+        ).first()
+        if participacion is None:
+            return jsonify({"error": "not_found"}), 404
+
+        db.session.delete(participacion)
+        db.session.commit()
+        return "", 204
 
     # ----------------- Gastos -----------------
 

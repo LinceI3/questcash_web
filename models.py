@@ -326,6 +326,58 @@ class ParticipacionQuest(MarcasDeTiempo, db.Model):
     )
 
 
+class InvitacionQuest(MarcasDeTiempo, db.Model):
+    """Invitación a colaborar en una meta, pendiente de aceptación.
+
+    Antes, invitar creaba directamente la `ParticipacionQuest`: la persona
+    quedaba dentro de una meta ajena sin aceptar nada, sin enterarse y sin
+    poder salirse —no existía forma de abandonar—. Y el endpoint respondía
+    "no existe un usuario con ese correo", lo que lo convertía en un oráculo
+    para averiguar si una dirección tenía cuenta en QuestCash.
+
+    Con este modelo, invitar solo registra una intención. El invitado la ve y
+    decide. Y como la invitación se crea exista o no la cuenta, la respuesta es
+    siempre la misma y deja de revelar nada.
+
+    El correo se guarda cifrado —para poder mostrarle al creador a quién
+    invitó— junto a su índice ciego, que es por donde el invitado encuentra lo
+    que le corresponde. Igual que en `usuarios`: ver crypto_utils.py.
+    """
+
+    __tablename__ = "invitaciones_quest"
+
+    PENDIENTE = "pendiente"
+    ACEPTADA = "aceptada"
+    RECHAZADA = "rechazada"
+    CANCELADA = "cancelada"
+
+    id = db.Column(db.Integer, primary_key=True)
+    quest_id = db.Column(db.Integer, db.ForeignKey("quests.id"), nullable=False)
+    invitado_por_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+
+    correo = db.Column(TextoCifrado(512), nullable=False)
+    correo_bi = db.Column(db.String(64), index=True, nullable=False)
+
+    estado = db.Column(db.String(20), nullable=False, default=PENDIENTE, server_default=PENDIENTE)
+    respondida_en = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    quest = db.relationship("Quest")
+    invitado_por = db.relationship("Usuario")
+
+    __table_args__ = (
+        # Una sola invitación viva por meta y correo. El estado forma parte de
+        # la clave para que rechazar y volver a invitar siga siendo posible.
+        db.UniqueConstraint("quest_id", "correo_bi", "estado", name="uq_invitacion_viva"),
+        db.Index("ix_invitaciones_correo_bi", "correo_bi"),
+        db.Index("ix_invitaciones_quest", "quest_id"),
+    )
+
+    def set_correo(self, correo):
+        normalizado = (correo or "").strip().lower()
+        self.correo = normalizado
+        self.correo_bi = indice_ciego(normalizado)
+
+
 class Insignia(MarcasDeTiempo, db.Model):
     __tablename__ = "insignias"
 
