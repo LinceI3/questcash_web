@@ -185,6 +185,58 @@ def create_app():
     migrate.init_app(app, db)
     csrf.init_app(app)
 
+    # ----------------- Cabeceras de seguridad -----------------
+    #
+    # Antes no se enviaba ninguna. Sin ellas, cualquier XSS futuro escala sin
+    # fricción, la página se puede embeber en un iframe ajeno para engañar al
+    # usuario, y el navegador adivina tipos de contenido que no debería.
+
+    # Orígenes de los que la web carga hoy código y estilos. Se listan
+    # explícitamente: cualquier otro queda bloqueado por el navegador.
+    #
+    # 'unsafe-inline' está aquí porque las plantillas todavía llevan 5 bloques
+    # <script>, 10 manejadores onclick y 32 atributos style en línea. Quitarlo
+    # es el objetivo, y llega solo cuando se autoalojen los CDN y se muevan
+    # esos manejadores a los .js de static/ (WEB-10, fase 4). Dejarlo dicho
+    # aquí es preferible a no poner CSP: sin ella no hay ninguna restricción.
+    CSP = "; ".join([
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com",
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+        "font-src 'self' https://cdn.jsdelivr.net data:",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "frame-ancestors 'none'",     # nadie puede embeber QuestCash en un iframe
+        "form-action 'self'",         # los formularios no pueden enviarse fuera
+        "base-uri 'self'",
+        "object-src 'none'",
+    ])
+
+    @app.after_request
+    def cabeceras_de_seguridad(respuesta):
+        respuesta.headers.setdefault("Content-Security-Policy", CSP)
+        # No adivinar el tipo de contenido: evita que una imagen subida se
+        # interprete como HTML o JavaScript.
+        respuesta.headers.setdefault("X-Content-Type-Options", "nosniff")
+        # Redundante con frame-ancestors, pero lo entienden navegadores viejos.
+        respuesta.headers.setdefault("X-Frame-Options", "DENY")
+        # No filtrar la ruta completa al salir hacia un tercero.
+        respuesta.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        # QuestCash no usa ninguna de estas capacidades.
+        respuesta.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        )
+
+        # HSTS solo cuando la conexión ya es segura: enviarlo por HTTP no tiene
+        # efecto, y activarlo en desarrollo sobre localhost dejaría el
+        # navegador negándose a abrir http://localhost durante meses.
+        if request.is_secure:
+            respuesta.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
+        return respuesta
+
     @app.context_processor
     def inject_csrf():
         # Permite usar {{ csrf_token() }} en las plantillas
