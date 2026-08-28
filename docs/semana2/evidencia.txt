@@ -1,0 +1,97 @@
+
+========================================================
+ P0 - LOGIN con credenciales validas => devuelve JWT (200)
+========================================================
+$ curl -i -X POST $BASE/auth/login -H "Content-Type: application/json" -d {"correo":"...","password":"..."}
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 202
+
+{"token":"REDACTADO-VALOR-DE-PRUEBA","user":{"correo":"armando@questcash.mx","id":1}}
+
+========================================================
+ P0b - LOGIN con contrasena incorrecta => 401 invalid_credentials
+========================================================
+$ curl -i -X POST $BASE/auth/login -d {"correo":"...","password":"incorrecta"}
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+Content-Length: 32
+
+{"error":"invalid_credentials"}
+
+========================================================
+ P1 - GET /auth/me SIN token => RECHAZA (401 missing_token)
+========================================================
+$ curl -i $BASE/auth/me
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+Content-Length: 26
+
+{"error":"missing_token"}
+
+========================================================
+ P2 - GET /auth/me CON token valido => ACEPTA (200)
+========================================================
+$ curl -i $BASE/auth/me -H "Authorization: Bearer $TOKEN"
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 74
+
+{"user":{"correo":"armando@questcash.mx","id":1,"nombre":"Armando Yael"}}
+
+========================================================
+ P3 - Token MANIPULADO (payload sub 1 -> 2, firma original) => 401 invalid_token
+========================================================
+$ curl -i $BASE/auth/me -H "Authorization: Bearer <token con payload alterado>"
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+Content-Length: 26
+
+{"error":"invalid_token"}
+
+========================================================
+ P4 - Token EXPIRADO => 401 token_expired
+========================================================
+$ curl -i $BASE/auth/me -H "Authorization: Bearer <token vencido>"
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+Content-Length: 26
+
+{"error":"token_expired"}
+
+========================================================
+ P5 - Token firmado con OTRA clave secreta => 401 invalid_token
+========================================================
+$ curl -i $BASE/auth/me -H "Authorization: Bearer <token firmado por un tercero>"
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+Content-Length: 26
+
+{"error":"invalid_token"}
+
+========================================================
+ P6 - Esquema de cabecera incorrecto (Basic en vez de Bearer) => 401 missing_token
+========================================================
+$ curl -i $BASE/auth/me -H "Authorization: Basic REDACTADO-VALOR-DE-PRUEBA"
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+Content-Length: 26
+
+{"error":"missing_token"}
+
+========================================================
+ P7 - Segundo endpoint protegido /dashboard: sin token vs con token
+========================================================
+$ curl -o /dev/null -w "%{http_code}" $BASE/dashboard                -> 401
+$ curl -o /dev/null -w "%{http_code}" $BASE/dashboard  (con Bearer)  -> 200
+
+========================================================
+ P8 - Contenido del token emitido (header y payload decodificados)
+========================================================
+token   : REDACTADO-VALOR-DE-PRUEBA
+header  : {"alg": "HS256", "typ": "JWT"}
+payload : {"sub": "1", "iat": 1786926351, "exp": 1789518351}
+iat     : 2026-08-17T00:25:51+00:00
+exp     : 2026-09-16T00:25:51+00:00
+vigencia: 30.0 dias
+firma   : NyrifCFB8aGz-iEx3RF6... (43 chars)

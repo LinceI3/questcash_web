@@ -1,0 +1,146 @@
+# =====================================================================
+#  QuestCash — Laboratorio de la semana 3
+#  Monitoreo + balanceo de carga + tolerancia a fallas
+#
+#  Topologia:
+#
+#        cliente  ->  [ lb : Nginx :8080 ]
+#                          |         |
+#                       api1      api2      (2 instancias IDENTICAS)
+#                          \         /
+#                           [   db   ]      (Postgres, compartida)
+#
+#        [ netdata :19999 ]  observa host + contenedores + Nginx
+#
+#  Uso:  docker compose -f docker-compose.lab.yml up -d --build
+# =====================================================================
+name: questcash-lab
+
+services:
+
+  # -------------------------------------------------------------------
+  #  Base de datos compartida por las dos instancias.
+  #  Es lo que las hace intercambiables: mismo estado, mismo dato.
+  # -------------------------------------------------------------------
+  db:
+    image: postgres:15
+    container_name: qc_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: questcash
+      POSTGRES_PASSWORD: PURGADO-ROTAR-EN-RENDER
+      POSTGRES_DB: questcash
+    volumes:
+      - qc_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U questcash -d questcash"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [qcnet]
+
+  # -------------------------------------------------------------------
+  #  INSTANCIA 1 de la API.  Se construye desde el Dockerfile del
+  #  proyecto y se sirve con Gunicorn (no con el servidor de desarrollo
+  #  de Flask, que es de un solo proceso y no aguanta concurrencia).
+  # -------------------------------------------------------------------
+  api1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: qc_api1
+    restart: unless-stopped
+    command: >
+      gunicorn --bind 0.0.0.0:5000
+               --workers 2
+               --access-logfile -
+               app:app
+    environment:
+      DATABASE_URL: postgresql://questcash:PURGADO-ROTAR-EN-RENDER@db:5432/questcash
+      SECRET_KEY: ${SECRET_KEY:?define SECRET_KEY en .env}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?define JWT_SECRET_KEY en .env}
+      INSTANCE_ID: api1
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [qcnet]
+    # Sin `ports:` a proposito -> las instancias NO son accesibles desde
+    # fuera. El unico punto de entrada es el balanceador.
+
+  # -------------------------------------------------------------------
+  #  INSTANCIA 2. Identica a la 1 salvo el nombre. Ese es justamente
+  #  el punto: son intercambiables.
+  # -------------------------------------------------------------------
+  api2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: qc_api2
+    restart: unless-stopped
+    command: >
+      gunicorn --bind 0.0.0.0:5000
+               --workers 2
+               --access-logfile -
+               app:app
+    environment:
+      DATABASE_URL: postgresql://questcash:PURGADO-ROTAR-EN-RENDER@db:5432/questcash
+      SECRET_KEY: ${SECRET_KEY:?define SECRET_KEY en .env}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?define JWT_SECRET_KEY en .env}
+      INSTANCE_ID: api2
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [qcnet]
+
+  # -------------------------------------------------------------------
+  #  BALANCEADOR DE CARGA. Unico contenedor con puerto publicado.
+  # -------------------------------------------------------------------
+  lb:
+    image: nginx:1.27-alpine
+    container_name: qc_lb
+    restart: unless-stopped
+    ports:
+      - "8080:80"          # en un servidor real seria 80:80 y 443:443
+    volumes:
+      - ./lab-semana3/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - qc_nginxlogs:/var/log/nginx
+    depends_on: [api1, api2]
+    networks: [qcnet]
+
+  # -------------------------------------------------------------------
+  #  MONITOREO. Netdata observa CPU, memoria, red, disco y el estado
+  #  de cada contenedor en tiempo real.  Panel: http://localhost:19999
+  # -------------------------------------------------------------------
+  netdata:
+    image: netdata/netdata:stable
+    container_name: qc_netdata
+    hostname: questcash-lab
+    restart: unless-stopped
+    ports:
+      - "19999:19999"
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - qc_netdataconfig:/etc/netdata
+      - qc_netdatalib:/var/lib/netdata
+      - qc_netdatacache:/var/cache/netdata
+      - /etc/passwd:/host/etc/passwd:ro
+      - /etc/group:/host/etc/group:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [qcnet]
+
+volumes:
+  qc_pgdata:
+  qc_nginxlogs:
+  qc_netdataconfig:
+  qc_netdatalib:
+  qc_netdatacache:
+
+networks:
+  qcnet:
+    driver: bridge

@@ -1,0 +1,95 @@
+
+========================================================================
+  PRUEBA 1 — ALTA DE USUARIO: la contraseña nunca se guarda en claro
+========================================================================
+Contraseña en claro que se envía : 'QuestCash2026!'
+Política de hashing vigente      : scrypt:32768:8:3
+Lo que devuelve el hasher        : scrypt:32768:8:3$EAOUMdqkl0dv9kLG$c8b2d7e9563854191eb8cef9d297adc76a4bbcc138c1f926a
+4913863c3dee5ca0864f1d45e8b5e71ed9eba3623e5e61da0508d758e3c728ca8b8ab36fe51180b
+
+  algoritmo          : scrypt   (KDF memory-hard, RFC 7914)
+  coste N            : 32768 = 2^15  ->  32 MiB de RAM por hash
+  tamaño de bloque r : 8
+  paralelismo p      : 3   (combinación recomendada por OWASP para N=2^15)
+  sal aleatoria      : EAOUMdqkl0dv9kLG   <- distinta para cada usuario
+  derivación         : 512 bits
+  longitud total     : 162 caracteres
+  tiempo de cálculo  : 391 ms   <- lo que paga un atacante por CADA intento
+
+Usuario insertado con id = 26
+
+========================================================================
+  PRUEBA 2 — QUERY DIRECTA A LA BASE: qué quedó escrito en disco
+========================================================================
+nombre        = qc1:WMiYYxaeYOlK8aHa7wNVCwMm-C9PbxI1A9HUQPFm8QnL7CrG46qMflNoqbQVOFmu
+correo        = qc1:Dd0G1XlyWK3ec59m9UmQUkUgjFZID6pzFfIujx4yn8Og83_XpBhChAAMMvKh5cePFpDn0xcBQFKs0w==
+correo_bi     = 2b62fc260ce240c5164d43f498962dbf0f06e14e278bfce32c7eed376dfd5289
+password_hash = scrypt:32768:8:3$EAOUMdqkl0dv9kLG$c8b2d7e9563854191eb8cef9d297adc76a4bbcc138c1f926a4913863c3dee5ca0864
+f1d45e8b5e71ed9eba3623e5e61da0508d758e3c728ca8b8ab36fe51180b
+
+¿aparece la contraseña 'QuestCash2026!' en algún campo?   NO
+¿aparece el correo en claro?   NO
+¿aparece el nombre 'Usuario De Evidencia' en claro?   NO
+
+========================================================================
+  PRUEBA 3 — LOGIN CORRECTO: se verifica sin revertir el hash
+========================================================================
+El correo está cifrado con un nonce distinto en cada escritura, así que
+no se puede hacer WHERE correo = '...'. El login busca por índice ciego:
+  HMAC-SHA256(clave, correo) = 2b62fc260ce240c5164d43f498962dbf0f06e14e278bfce32c7eed376dfd5289
+
+Fila encontrada                 : id = 26
+Nombre descifrado en memoria    : 'Usuario De Evidencia'
+verificar_password(hash, 'QuestCash2026!') -> True
+
+========================================================================
+  PRUEBA 4 — LOGIN INCORRECTO: variaciones mínimas no pasan
+========================================================================
+  verificar_password(hash, 'questcash2026!') -> False
+  verificar_password(hash, 'QuestCash2026! ') -> False
+  verificar_password(hash, 'QuestCash2026') -> False
+  verificar_password(hash, '123456') -> False
+  verificar_password(hash, <el propio hash robado de la BD>) -> False
+
+========================================================================
+  PRUEBA 5 — SAL ALEATORIA: el mismo password produce hashes distintos
+========================================================================
+  1) scrypt:32768:8:3$EAOUMdqkl0dv9kLG$c8b2d7e9563854191eb8cef9d297adc76a4bbcc138c1f926a4913863c3dee5ca0864f1d45e8b5e7
+1ed9eba3623e5e61da0508d758e3c728ca8b8ab36fe51180b
+  2) scrypt:32768:8:3$7FRBxnMDiWNuGTcR$14273b4ed2904e5c0e298e35e1fa57989731e7b5f2e4fceac47876379b8df15b907d5a01603e08e
+851782c6ea951db35eec8622f5db3133835e8cdb64d2a6afe
+  ¿son iguales? False
+
+  Consecuencia: dos usuarios con la MISMA contraseña tienen hashes distintos.
+  Una tabla arcoíris precomputada no sirve, y ver la base de datos no
+  revela qué cuentas comparten contraseña.
+
+========================================================================
+  PRUEBA 6 — MIGRACIÓN DE PARÁMETROS: los hashes viejos siguen sirviendo
+========================================================================
+Hash con la configuración anterior (p=1):
+  scrypt:32768:8:1$ciLxn5Grl0XBEHtY$06a6d99dd2caaeb75c59b738f0be9674c21f...
+  verificar_password(...) -> True   (sigue validando)
+  necesita_rehash(...)    -> True   (se regenera al siguiente login)
+  necesita_rehash(hash actual) -> False
+
+========================================================================
+  PRUEBA 7 — CIFRADO EN REPOSO: ida y vuelta + detección de manipulación
+========================================================================
+Texto original : 'Ahorro para la consulta con el cardiólogo'
+Cifrado        : qc1:kURprRWDZjbseko2R0icOPwuskRrlztwBi6iv-xtIsN_-eHudqmKExtLIryQFABJDmNUk3Cwx58uSfjDln7l6OzgWyQZtQ==
+Descifrado     : 'Ahorro para la consulta con el cardiólogo'
+¿coincide?     : True
+
+Ahora se altera un byte del criptograma, como haría alguien con acceso
+de escritura al archivo de la base de datos:
+  El descifrado FALLA -> InvalidTag: el tag GCM detecta la manipulación
+
+========================================================================
+  PRUEBA 8 — LIMPIEZA
+========================================================================
+Usuario de prueba id = 26 eliminado.
+
+========================================================================
+  FIN DE LA EVIDENCIA
+========================================================================

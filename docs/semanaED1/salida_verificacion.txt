@@ -1,0 +1,6 @@
+usuarios.nombre          valores=25   cifrados=25   errores_al_descifrar=0
+usuarios.correo          valores=25   cifrados=25   errores_al_descifrar=0
+usuarios.alias           valores=3    cifrados=3    errores_al_descifrar=0
+movimientos.nota         valores=7    cifrados=7    errores_al_descifrar=0
+gastos.descripcion       valores=13   cifrados=13   errores_al_descifrar=0
+TOTAL                    valores=73   cifrados=73   errores_al_descifrar=0

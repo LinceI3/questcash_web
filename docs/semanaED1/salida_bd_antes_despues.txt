@@ -1,0 +1,35 @@
+### ANTES DE LA MIGRACIÓN  (copia previa)  ###
+
+sqlite> SELECT id, nombre, correo, password_hash FROM usuarios WHERE id IN (1,18);
+
+id            = 1
+nombre        = Armando Contreras
+correo        = armando.yael.contreras.13@gmail.com
+password_hash = scrypt:32768:8:1$mznw5MjofUvDZ3tq$8b9f5fd81b6ec823f3c62bf61b447769e0237001cebd2376aa7b9d9762fbd77de33b
+4c903238af31bc670bf225dc6acb6369cc93452a550b7e9a3dfa7e1f5e67
+
+id            = 18
+nombre        = Pepe
+correo        = pepe@gmail.com
+password_hash = scrypt:32768:8:1$DfV5Y0jjKPPHq323$13b7cbdb663de2a109e02868b11472da5e8ebc51ef451ebf243508cbd453d97e2f7b
+314a80bdee8428b987fadaa580951de342a654093088541cfd7ade87bf5b
+
+
+### DESPUÉS DE LA MIGRACIÓN ###
+
+sqlite> SELECT id, nombre, correo, correo_bi, password_hash FROM usuarios WHERE id IN (1,18);
+
+id            = 1
+nombre        = qc1:5EJiU2VYuGCWUv1AsQpmLpu2PiQXuqgWA93d55b6tWCr844TNZgPuV-E2J1j
+correo        = qc1:xSSPaHAiEpnB4hY8aghKvU2W2ThsPKZZKNkeRJWfYl8NMrIHYl45YT4ryy8koqHa9QQ0ZdySx5rgv4wGSJ5U
+correo_bi     = 684c7959422e4018c6e3e5b4c438e1868158b1aa99f149c623cd9c6d4c2a8197
+password_hash = scrypt:32768:8:1$mznw5MjofUvDZ3tq$8b9f5fd81b6ec823f3c62bf61b447769e0237001cebd2376aa7b9d9762fbd77de33b
+4c903238af31bc670bf225dc6acb6369cc93452a550b7e9a3dfa7e1f5e67
+
+id            = 18
+nombre        = qc1:YXpb0cMfQZ-RbSLGDcb0R0DQHztAPCyiH6IL8bYxdaU=
+correo        = qc1:lr4GYT5UjW6L3Qug1ikQbS6MnmzkTRV1hVmTRp9Qd-Xi8Xa0y0nn6hX1
+correo_bi     = a99563d07e63902e9a98f90eb8f1233aad8fd8b70f769c2f24fbb47fa752ce8c
+password_hash = scrypt:32768:8:1$DfV5Y0jjKPPHq323$13b7cbdb663de2a109e02868b11472da5e8ebc51ef451ebf243508cbd453d97e2f7b
+314a80bdee8428b987fadaa580951de342a654093088541cfd7ade87bf5b
+
