@@ -1,18 +1,73 @@
 # models.py
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.types import TypeDecorator
 from datetime import datetime, date
 
+from crypto_utils import cifrar, descifrar, indice_ciego
+
 db = SQLAlchemy()
+
+
+class TextoCifrado(TypeDecorator):
+    """Columna que se guarda cifrada con AES-256-GCM y se lee en claro.
+
+    El cifrado ocurre en el borde de SQLAlchemy: `process_bind_param` corre
+    justo antes de mandar el valor a la base de datos y `process_result_value`
+    justo después de leerlo. Para el resto de la aplicación —vistas, API,
+    plantillas— el atributo se comporta como un `String` normal; lo que cambia
+    es lo que queda escrito en disco.
+
+    Ver `crypto_utils.py` para el formato del sobre (`qc1:...`) y el manejo de
+    claves.
+    """
+
+    impl = db.String
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        return cifrar(value)
+
+    def process_result_value(self, value, dialect):
+        return descifrar(value)
 
 
 class Usuario(db.Model):
     __tablename__ = "usuarios"
 
     id = db.Column(db.Integer, primary_key=True)
-    nombre = db.Column(db.String(100), nullable=False)
-    correo = db.Column(db.String(120), unique=True, nullable=False)
+
+    # --- Datos personales: cifrados en reposo (ver TextoCifrado) -------------
+    # La longitud declarada es la del CRIPTOGRAMA, no la del dato: el sobre
+    # AES-GCM en base64url ocupa aproximadamente 4/3 del original más 40 bytes
+    # de nonce y tag. Se declara 512 con holgura.
+    nombre = db.Column(TextoCifrado(512), nullable=False)
+    correo = db.Column(TextoCifrado(512), nullable=False)
+
+    # Índice ciego del correo: HMAC-SHA256 determinista del correo normalizado.
+    # Es por donde se busca al hacer login (el correo cifrado no se puede
+    # consultar porque cada escritura usa un nonce distinto) y donde vive
+    # ahora la restricción de unicidad de la cuenta.
+    correo_bi = db.Column(db.String(64), unique=True, index=True, nullable=True)
+
     password_hash = db.Column(db.String(255), nullable=False)
     fecha_registro = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # --- Búsqueda por correo ------------------------------------------------
+    @staticmethod
+    def por_correo(correo):
+        """Sustituye a `Usuario.query.filter_by(correo=...)`, que dejó de
+        funcionar al cifrar la columna. Busca por el índice ciego."""
+        bi = indice_ciego(correo)
+        if not bi:
+            return None
+        return Usuario.query.filter_by(correo_bi=bi).first()
+
+    def set_correo(self, correo):
+        """Asigna el correo y mantiene sincronizado su índice ciego. Usar
+        siempre esto en vez de `usuario.correo = ...`."""
+        normalizado = (correo or "").strip().lower()
+        self.correo = normalizado
+        self.correo_bi = indice_ciego(normalizado)
 
     # 🔸 Puntos acumulados del usuario
     puntos_totales = db.Column(db.Integer, nullable=False, default=0)
@@ -27,7 +82,8 @@ class Usuario(db.Model):
     insignias_usuario = db.relationship("UsuarioInsignia", back_populates="usuario", lazy=True)
 
     # --- Perfil del usuario ---
-    alias = db.Column(db.String(50), nullable=True)
+    # El alias es un dato personal más: también va cifrado en reposo.
+    alias = db.Column(TextoCifrado(512), nullable=True)
 
     # Foto de perfil (nombre del archivo almacenado en /static/uploads/profiles)
     foto_perfil = db.Column(db.String(255), nullable=True)
@@ -99,7 +155,9 @@ class Movimiento(db.Model):
     tipo = db.Column(db.String(20), nullable=False)  # 'aporte' o 'retiro'
     monto = db.Column(db.Float, nullable=False)
     fecha = db.Column(db.DateTime, default=datetime.utcnow)
-    nota = db.Column(db.Text, nullable=True)
+    # La nota describe en texto libre en qué se ahorró o se retiró dinero:
+    # es detalle financiero del usuario, va cifrada en reposo.
+    nota = db.Column(TextoCifrado(2048), nullable=True)
     # Categoría del movimiento (comida, transporte, viaje, etc.)
     categoria = db.Column(db.String(50), nullable=True, default="general")
 
@@ -187,7 +245,9 @@ class Gasto(db.Model):
     )
 
     monto = db.Column(db.Float, nullable=False)
-    descripcion = db.Column(db.String(200))
+    # Descripción del gasto ("consulta médica", "pago del abogado"): puede
+    # revelar hábitos y datos de salud o legales. Cifrada en reposo.
+    descripcion = db.Column(TextoCifrado(1024))
     fecha = db.Column(db.Date, nullable=False, default=date.today)
     metodo_pago = db.Column(db.String(30))  # ej. 'efectivo', 'tarjeta', 'transferencia'
 

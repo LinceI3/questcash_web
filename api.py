@@ -11,7 +11,8 @@ import re
 from datetime import date, datetime, timedelta
 
 from flask import Blueprint, g, jsonify, request
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash  # noqa: F401 (compatibilidad)
+from password_hashing import hashear_password, necesita_rehash, verificar_password
 
 from auth_jwt import generate_token, jwt_required
 from ia.services.questy_engine import evaluate_quest
@@ -220,9 +221,10 @@ def register_api(app, csrf, ctx):
 
         usuario = Usuario(
             nombre=nombre,
-            correo=correo,
-            password_hash=generate_password_hash(password),
+            password_hash=hashear_password(password),
         )
+        # set_correo cifra el correo y calcula su índice ciego.
+        usuario.set_correo(correo)
         db.session.add(usuario)
         db.session.commit()
 
@@ -246,9 +248,14 @@ def register_api(app, csrf, ctx):
             restante = int((intento["bloqueado_hasta"] - ahora).total_seconds())
             return jsonify({"error": "locked", "retry_after_seconds": max(restante, 1)}), 429
 
-        usuario = Usuario.query.filter_by(correo=correo).first()
-        if usuario and check_password_hash(usuario.password_hash, password):
+        usuario = Usuario.por_correo(correo)
+        if usuario and verificar_password(usuario.password_hash, password):
             intentos_login.pop(clave, None)
+
+            # Re-hash oportunista si la cuenta venía con parámetros antiguos.
+            if necesita_rehash(usuario.password_hash):
+                usuario.password_hash = hashear_password(password)
+                db.session.commit()
             token = generate_token(usuario.id)
             rank_state = _augment_rank_state(calcular_estado_rango_perfil(usuario.puntos_totales or 0))
             return jsonify({"token": token, "user": serialize_user(usuario), "rank_state": rank_state})
@@ -641,7 +648,7 @@ def register_api(app, csrf, ctx):
 
         usuario_invitado = None
         if not errores:
-            usuario_invitado = Usuario.query.filter_by(correo=correo).first()
+            usuario_invitado = Usuario.por_correo(correo)
             if not usuario_invitado:
                 errores.append("No existe un usuario registrado con ese correo.")
             elif usuario_invitado.id == quest.usuario_id:

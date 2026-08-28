@@ -70,7 +70,9 @@ def validar_registro(nombre, correo, password, password2):
             errores.append("La contraseña no puede ser igual a tu correo.")
 
     if correo and not errores:
-        if Usuario.query.filter_by(correo=correo).first():
+        # Búsqueda por índice ciego: la columna `correo` está cifrada y no
+        # se puede consultar directamente (ver crypto_utils.py).
+        if Usuario.por_correo(correo):
             errores.append("Ya existe una cuenta registrada con ese correo.")
 
     return errores

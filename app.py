@@ -32,7 +32,8 @@ from models import (
     Notificacion,
 )
 
-from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.security import generate_password_hash, check_password_hash  # noqa: F401 (compatibilidad)
+from password_hashing import hashear_password, necesita_rehash, verificar_password
 from ia.services.questy_engine import QuestyInput, evaluate_quest
 from validators import (
     validar_registro,
@@ -1768,9 +1769,10 @@ def create_app():
 
             nuevo_usuario = Usuario(
                 nombre=nombre,
-                correo=correo,
-                password_hash=generate_password_hash(password),
+                password_hash=hashear_password(password),
             )
+            # set_correo cifra el correo y calcula su índice ciego.
+            nuevo_usuario.set_correo(correo)
             db.session.add(nuevo_usuario)
             db.session.commit()
 
@@ -1801,11 +1803,18 @@ def create_app():
                 )
                 return render_template("auth/login.html")
 
-            usuario = Usuario.query.filter_by(correo=correo).first()
+            usuario = Usuario.por_correo(correo)
 
-            if usuario and check_password_hash(usuario.password_hash, password):
+            if usuario and verificar_password(usuario.password_hash, password):
                 # Login exitoso: limpiar intentos fallidos
                 intentos_login.pop(clave_intento, None)
+
+                # Si la cuenta traía un hash con parámetros antiguos, este es
+                # el único momento en que existe la contraseña en claro:
+                # se aprovecha para regenerarlo con la política vigente.
+                if necesita_rehash(usuario.password_hash):
+                    usuario.password_hash = hashear_password(password)
+                    db.session.commit()
 
                 session.clear()
                 session["user_id"] = usuario.id
@@ -2640,7 +2649,7 @@ def create_app():
 
             # 3) Validar existencia en la base de datos y reglas de negocio
             if not errores:
-                usuario_invitado = Usuario.query.filter_by(correo=correo).first()
+                usuario_invitado = Usuario.por_correo(correo)
                 if not usuario_invitado:
                     errores.append("No existe un usuario registrado con ese correo.")
                 elif usuario_invitado.id == quest.usuario_id:
