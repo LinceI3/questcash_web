@@ -2,6 +2,7 @@
 from decimal import Decimal
 
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import declared_attr
 from sqlalchemy.types import TypeDecorator
 from datetime import datetime, date
 
@@ -28,6 +29,42 @@ Dinero = db.Numeric(14, 2)
 CERO = Decimal("0.00")
 
 
+class MarcasDeTiempo:
+    """Cuándo se creó y cuándo se tocó por última vez cada fila.
+
+    Hacen falta para tres cosas que hoy no se pueden hacer:
+
+      - Sincronización incremental: un cliente móvil que vuelve tras estar sin
+        red necesita pedir "lo que cambió desde X" en vez de recargarlo todo.
+      - Investigar un incidente: sin saber cuándo cambió una fila no se puede
+        reconstruir qué pasó, que es justo lo que exige la obligación de
+        notificar una vulneración de datos.
+      - Retención: no se puede aplicar una política de conservación sobre datos
+        que no dicen cuándo nacieron.
+
+    Se usa `server_default=now()` para que las filas que ya existen queden con
+    un valor en vez de NULL al aplicar la migración, y `onupdate` para que
+    `actualizado_en` se mantenga solo sin que cada vista tenga que acordarse.
+    """
+
+    @declared_attr
+    def creado_en(cls):
+        return db.Column(
+            db.DateTime(timezone=True),
+            nullable=False,
+            server_default=db.func.now(),
+        )
+
+    @declared_attr
+    def actualizado_en(cls):
+        return db.Column(
+            db.DateTime(timezone=True),
+            nullable=False,
+            server_default=db.func.now(),
+            onupdate=db.func.now(),
+        )
+
+
 class TextoCifrado(TypeDecorator):
     """Columna que se guarda cifrada con AES-256-GCM y se lee en claro.
 
@@ -51,7 +88,7 @@ class TextoCifrado(TypeDecorator):
         return descifrar(value)
 
 
-class Usuario(db.Model):
+class Usuario(MarcasDeTiempo, db.Model):
     __tablename__ = "usuarios"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -114,7 +151,7 @@ class Usuario(db.Model):
     notif_progreso = db.Column(db.Boolean, nullable=False, default=True)
 
 
-class Quest(db.Model):
+class Quest(MarcasDeTiempo, db.Model):
     __tablename__ = "quests"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -162,6 +199,10 @@ class Quest(db.Model):
         cascade="all, delete-orphan",
     )
 
+    __table_args__ = (
+        db.Index("ix_quests_usuario", "usuario_id"),
+    )
+
     def progreso_porcentaje(self):
         objetivo = self.monto_objetivo or CERO
         if objetivo <= 0:
@@ -170,7 +211,7 @@ class Quest(db.Model):
         return min(int((actual / objetivo) * 100), 100)
 
 
-class Movimiento(db.Model):
+class Movimiento(MarcasDeTiempo, db.Model):
     __tablename__ = "movimientos"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -190,8 +231,15 @@ class Movimiento(db.Model):
     usuario = db.relationship("Usuario")
     quest = db.relationship("Quest", back_populates="movimientos")
 
+    __table_args__ = (
+        # El dashboard, las rachas y las estadísticas filtran por usuario y
+        # ordenan por fecha descendente. Este índice cubre las tres.
+        db.Index("ix_movimientos_usuario_fecha", "usuario_id", db.text("fecha DESC")),
+        db.Index("ix_movimientos_quest", "quest_id"),
+    )
 
-class ParticipacionQuest(db.Model):
+
+class ParticipacionQuest(MarcasDeTiempo, db.Model):
     __tablename__ = "participaciones_quest"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -206,10 +254,11 @@ class ParticipacionQuest(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint("usuario_id", "quest_id", name="uq_usuario_quest"),
+        db.Index("ix_participaciones_quest", "quest_id"),
     )
 
 
-class Insignia(db.Model):
+class Insignia(MarcasDeTiempo, db.Model):
     __tablename__ = "insignias"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -222,7 +271,7 @@ class Insignia(db.Model):
     usuarios = db.relationship("UsuarioInsignia", back_populates="insignia", lazy=True)
 
 
-class UsuarioInsignia(db.Model):
+class UsuarioInsignia(MarcasDeTiempo, db.Model):
     __tablename__ = "usuarios_insignias"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -235,11 +284,12 @@ class UsuarioInsignia(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint("usuario_id", "insignia_id", name="uq_usuario_insignia"),
+        db.Index("ix_usuarios_insignias_insignia", "insignia_id"),
     )
 
    
 
-class CategoriaGasto(db.Model):
+class CategoriaGasto(MarcasDeTiempo, db.Model):
     __tablename__ = "categorias_gasto"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -253,7 +303,7 @@ class CategoriaGasto(db.Model):
         return f"<CategoriaGasto {self.nombre}>"
 
 
-class Gasto(db.Model):
+class Gasto(MarcasDeTiempo, db.Model):
     __tablename__ = "gastos"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -279,11 +329,16 @@ class Gasto(db.Model):
     usuario = db.relationship("Usuario", backref="gastos")
     categoria = db.relationship("CategoriaGasto", back_populates="gastos")
 
+    __table_args__ = (
+        db.Index("ix_gastos_usuario_fecha", "usuario_id", db.text("fecha DESC")),
+        db.Index("ix_gastos_categoria", "categoria_id"),
+    )
+
     def __repr__(self):
         return f"<Gasto {self.monto} {self.categoria_id} {self.fecha}>"
 
 
-class Notificacion(db.Model):
+class Notificacion(MarcasDeTiempo, db.Model):
     """Notificaciones persistidas, disparadas por eventos reales (meta
     completada, insignia nueva, aporte de un colaborador). Las notificaciones
     de reglas dinámicas (recordatorios de vencimiento, consejos de gasto)
@@ -311,5 +366,9 @@ class Notificacion(db.Model):
     usuario = db.relationship("Usuario")
     quest = db.relationship("Quest")
 
+    __table_args__ = (
+        db.Index("ix_notificaciones_usuario_fecha", "usuario_id", db.text("fecha_creacion DESC")),
+    )
+
     def __repr__(self):
-        return f"<Gasto {self.monto} {self.categoria_id} {self.fecha}>"
+        return f"<Notificacion {self.tipo} usuario={self.usuario_id}>"
