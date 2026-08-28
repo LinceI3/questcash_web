@@ -1,5 +1,6 @@
 # app.py
 import math
+import os
 from flask import (
     Flask,
     render_template,
@@ -146,6 +147,49 @@ def _ensure_schema():
             db.session.commit()
         except Exception:
             db.session.rollback()
+
+
+# Clave arbitraria y fija del advisory lock de arranque. Solo tiene que ser
+# la misma en todos los procesos de QuestCash y no chocar con otro uso.
+_BOOTSTRAP_LOCK_KEY = 728451903
+
+
+def _bootstrap_esquema():
+    """Crea las tablas y siembra las insignias base, una sola vez por arranque.
+
+    Con más de un worker de gunicorn, todos importan este módulo a la vez y
+    ejecutaban `db.create_all()` en paralelo. Postgres rechaza al segundo con
+    UniqueViolation sobre `pg_class` (la secuencia ya existe) y el worker muere
+    antes de atender nada; con `--workers 2` eso tumba el arranque entero. El
+    servidor de desarrollo nunca lo destapó porque es un solo proceso.
+
+    Se toma un advisory lock para que solo un proceso haga el trabajo y el
+    resto espere a que termine; cuando entran, `create_all` y `seed_insignias`
+    ya no tienen nada que hacer y son no-ops.
+
+    MEDIDA PUENTE: el destino es Alembic con la migración como paso explícito
+    del despliegue, fuera del arranque de la aplicación. Esto solo hace que el
+    esquema actual sobreviva a varios workers sin cambiar cómo se gestiona.
+    """
+    es_postgres = db.engine.dialect.name == "postgresql"
+
+    if not es_postgres:
+        # SQLite en local: un solo proceso, no hay carrera que serializar.
+        db.create_all()
+        _ensure_schema()
+        seed_insignias()
+        return
+
+    with db.engine.connect() as conn:
+        conn.execute(db.text("SELECT pg_advisory_lock(:clave)"), {"clave": _BOOTSTRAP_LOCK_KEY})
+        conn.commit()
+        try:
+            db.create_all()
+            _ensure_schema()
+            seed_insignias()
+        finally:
+            conn.execute(db.text("SELECT pg_advisory_unlock(:clave)"), {"clave": _BOOTSTRAP_LOCK_KEY})
+            conn.commit()
 
 
 def create_app():
@@ -2792,12 +2836,29 @@ def create_app():
 
     # Crear tablas + insignias base al finalizar la configuración de la app
     with app.app_context():
-        db.create_all()
-        _ensure_schema()
-        seed_insignias()
+        _bootstrap_esquema()
     return app
 
 app = create_app()
+
 if __name__ == "__main__":
-    
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # SERVIDOR DE DESARROLLO ÚNICAMENTE.
+    #
+    # En producción la aplicación la sirve gunicorn como `app:app` (ver
+    # Dockerfile y docker-compose.segmentado.yml). El servidor de Werkzeug es
+    # mono-hilo, no soporta carga real y —con debug activo— publica una consola
+    # interactiva que ejecuta código Python arbitrario en el contenedor.
+    #
+    # Por eso el modo debug ya no viene activado por omisión: hay que pedirlo
+    # explícitamente con FLASK_DEBUG=1, y solo en la máquina de desarrollo.
+    #
+    #     FLASK_DEBUG=1 PORT=5001 python app.py
+    #
+    # Se mantiene 0.0.0.0 por omisión para que la app móvil siga alcanzando
+    # este servidor desde un teléfono de la red local durante el desarrollo.
+    debug = os.environ.get("FLASK_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+    app.run(
+        host=os.environ.get("FLASK_RUN_HOST", "0.0.0.0"),
+        port=int(os.environ.get("PORT", 5000)),
+        debug=debug,
+    )

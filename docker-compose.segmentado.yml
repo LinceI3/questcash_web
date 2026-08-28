@@ -1,0 +1,116 @@
+# =====================================================================
+#  QuestCash — Entregable ED, Semana 1
+#  Separación explícita del plano PÚBLICO y el plano PRIVADO
+#
+#  La separación no se declara en un diagrama: se declara aquí, y se puede
+#  comprobar con `docs/semanaED1/prueba_aislamiento.sh`.
+#
+#      Internet
+#         |
+#         v  (único puerto publicado en todo el archivo)
+#   [ gateway : Nginx  :8443 ]        red: publica
+#         |
+#         |  ---- frontera ---------------------------------------
+#         v
+#   [ web : Flask/Gunicorn ]          redes: publica + privada
+#         |
+#         v
+#   [ db : PostgreSQL ]               red: privada   (SIN puertos)
+#
+#  Reglas que impone este archivo:
+#
+#    1. Solo `gateway` tiene sección `ports:`. Todo lo demás es inalcanzable
+#       desde la máquina anfitriona y, por tanto, desde Internet.
+#    2. `db` está ÚNICAMENTE en la red `privada`. `gateway` está únicamente
+#       en la `publica`. No comparten red: aunque alguien tomara el control
+#       del Nginx, no tiene ruta de red hacia Postgres — tendría que pasar
+#       por la aplicación.
+#    3. `privada` se declara `internal: true`: Docker no le crea ruta de
+#       salida a Internet. La base de datos no puede iniciar conexiones
+#       hacia afuera, lo que corta la vía típica de exfiltración.
+#
+#  Uso:
+#      docker compose -f docker-compose.segmentado.yml up -d --build
+#      bash docs/semanaED1/prueba_aislamiento.sh
+# =====================================================================
+name: questcash-segmentado
+
+services:
+
+  # -------------------------------------------------------------------
+  #  PLANO PÚBLICO — puerta de entrada.
+  #  Equivale, en el despliegue real, al servicio de Render: es la única
+  #  pieza con nombre DNS y certificado TLS.
+  # -------------------------------------------------------------------
+  gateway:
+    image: nginx:1.27-alpine
+    container_name: qc_gateway
+    restart: unless-stopped
+    ports:
+      - "8443:80"                    # en producción: 443 con TLS
+    volumes:
+      - ./lab-semana3/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on: [web]
+    networks: [publica]
+
+  # -------------------------------------------------------------------
+  #  FRONTERA — la aplicación. Es el ÚNICO componente que pertenece a las
+  #  dos redes, y por eso el único camino legítimo del exterior hacia los
+  #  datos. Todas las reglas de negocio y de autorización viven aquí.
+  # -------------------------------------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: qc_web
+    restart: unless-stopped
+    command: >
+      gunicorn --bind 0.0.0.0:5000
+               --workers 2
+               --access-logfile -
+               app:app
+    environment:
+      DATABASE_URL: postgresql://questcash:${POSTGRES_PASSWORD:-cambiame}@db:5432/questcash
+      SECRET_KEY: ${SECRET_KEY:?define SECRET_KEY en .env}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?define JWT_SECRET_KEY en .env}
+      # Claves del cifrado en reposo. Nunca se versionan: viven en .env
+      # (ignorado por git) y, en Render, en el panel de Environment.
+      DATA_ENC_KEY: ${DATA_ENC_KEY:?define DATA_ENC_KEY en .env}
+      BLIND_INDEX_KEY: ${BLIND_INDEX_KEY:?define BLIND_INDEX_KEY en .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [publica, privada]
+    # Sin `ports:` — no se llega a Flask sin pasar por el gateway.
+
+  # -------------------------------------------------------------------
+  #  PLANO PRIVADO — el dato.
+  #  Sin `ports:`, en una red `internal`, y con la contraseña tomada del
+  #  entorno en vez de estar escrita en el archivo.
+  # -------------------------------------------------------------------
+  db:
+    image: postgres:15
+    container_name: qc_db_privada
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: questcash
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}
+      POSTGRES_DB: questcash
+    volumes:
+      - qc_pgdata_priv:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U questcash -d questcash"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [privada]
+
+volumes:
+  qc_pgdata_priv:
+
+networks:
+  publica:
+    driver: bridge
+  privada:
+    driver: bridge
+    internal: true      # sin ruta hacia Internet, ni de entrada ni de salida

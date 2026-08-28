@@ -1,9 +1,43 @@
+# Contexto de build de QuestCash.
+#
+# Sin estas exclusiones, `COPY . .` arrastraba ~760 MB de CSV crudos del INEGI
+# a la imagen. En tiempo de ejecución el motor Questy solo necesita UN archivo:
+# data/processed/segment_summary.csv (4 KB) — ver ia/services/questy_engine.py.
+# Los CSV grandes son insumo de los scripts de ia/scripts/, que se corren en la
+# máquina de desarrollo, no dentro del contenedor.
+
+# --- Python ---
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 venv/
+.venv/
+*.egg-info/
+
+# --- Secretos y estado local ---
 .env
+.env.*
+!.env.example
+*.db
+*.sqlite3
+instance/
+
+# --- Control de versiones y herramientas ---
 .git
 .gitignore
-instance/
+.github/
+.claude/
+.DS_Store
+**/.DS_Store
+
+# --- Datos: se conserva únicamente el resumen que lee Questy ---
+data/raw/
+data/processed/*
+!data/processed/segment_summary.csv
+
+# --- Entregables académicos y documentación (no son runtime) ---
+docs/
+lab-semana3/
+tests/
+*.md

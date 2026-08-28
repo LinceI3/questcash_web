@@ -4,6 +4,7 @@
 Funciones puras (sin closures de Flask): reciben strings crudos, devuelven
 (errores, datos) donde `datos` solo se llena si `errores` está vacío.
 """
+import math
 import re
 from datetime import date, datetime, timedelta
 
@@ -92,6 +93,11 @@ def validar_quest_form(nombre, monto_objetivo_raw, monto_actual_raw, fecha_limit
     monto_objetivo_float = None
     try:
         monto_objetivo_float = float(monto_objetivo_raw)
+        if not math.isfinite(monto_objetivo_float):
+            # float("nan") pasa cualquier comparación: nan <= 0 y nan > 1e9 son
+            # ambas falsas, así que sin este guardia entraría a la base de datos
+            # y dejaría el monto de la meta corrupto de forma irreversible.
+            raise ValueError("monto no finito")
         if monto_objetivo_float <= 0:
             errores.append("El monto objetivo debe ser mayor a 0.")
     except (TypeError, ValueError):
@@ -100,6 +106,8 @@ def validar_quest_form(nombre, monto_objetivo_raw, monto_actual_raw, fecha_limit
     monto_actual_float = None
     try:
         monto_actual_float = float(monto_actual_raw) if monto_actual_raw else 0.0
+        if not math.isfinite(monto_actual_float):
+            raise ValueError("monto no finito")
         if monto_actual_float < 0:
             errores.append("El monto actual no puede ser negativo.")
     except (TypeError, ValueError):
@@ -158,6 +166,8 @@ def validar_movimiento(tipo_raw, monto_raw, nota_raw, categoria_raw, quest):
     monto_float = None
     try:
         monto_float = float(monto_raw)
+        if not math.isfinite(monto_float):
+            raise ValueError("monto no finito")
         if monto_float <= 0:
             errores.append("El monto debe ser mayor a 0.")
         if monto_float > 1_000_000_000:
@@ -199,6 +209,8 @@ def validar_gasto(monto_raw, descripcion_raw, fecha_raw):
     monto = None
     try:
         monto = float(monto_raw)
+        if not math.isfinite(monto):
+            raise ValueError("monto no finito")
         if monto <= 0:
             errores.append("El monto del gasto debe ser mayor a 0.")
         if monto > 1_000_000_000:
