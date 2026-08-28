@@ -331,8 +331,8 @@ def register_api(app, csrf, ctx):
             "porcentaje_ingreso_gastado": questy_home.get("porcentaje_ingreso_gastado", 0.0),
         }
 
-        total_objetivo = sum(q.monto_objetivo for q in quests) or 0
-        total_actual = sum(q.monto_actual for q in quests) or 0
+        total_objetivo = float(sum(q.monto_objetivo for q in quests) or 0)
+        total_actual = float(sum(q.monto_actual for q in quests) or 0)
         progreso_global = int(total_actual / total_objetivo * 100) if total_objetivo > 0 else 0
 
         completados = [q for q in quests if q.progreso_porcentaje() >= 100 or q.estatus == "completado"]
@@ -706,7 +706,9 @@ def register_api(app, csrf, ctx):
             .order_by(Gasto.fecha.desc())
             .all()
         )
-        total_periodo = sum(gasto.monto for gasto in gastos) or 0.0
+        # float() en el borde de lectura: de aquí en adelante son cifras de
+        # presentación (porcentajes, variaciones), no aritmética de saldo.
+        total_periodo = float(sum(gasto.monto for gasto in gastos) or 0)
 
         total_anterior = (
             db.session.query(db.func.sum(Gasto.monto))
@@ -715,8 +717,9 @@ def register_api(app, csrf, ctx):
                 Gasto.fecha >= inicio_anterior,
                 Gasto.fecha <= fin_anterior,
             )
-            .scalar() or 0.0
+            .scalar() or 0
         )
+        total_anterior = float(total_anterior)
         variacion_pct = (
             ((total_periodo - total_anterior) / total_anterior * 100) if total_anterior > 0 else 0.0
         )
@@ -725,7 +728,7 @@ def register_api(app, csrf, ctx):
         color_por_categoria = {}
         for gasto in gastos:
             nombre = gasto.categoria.nombre if gasto.categoria else "Otros"
-            por_categoria[nombre] = por_categoria.get(nombre, 0.0) + gasto.monto
+            por_categoria[nombre] = por_categoria.get(nombre, 0.0) + float(gasto.monto or 0)
             if gasto.categoria and gasto.categoria.color:
                 color_por_categoria[nombre] = gasto.categoria.color
 

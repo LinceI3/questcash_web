@@ -1,6 +1,8 @@
 # app.py
 import math
 import os
+from decimal import Decimal
+from flask.json.provider import DefaultJSONProvider
 from flask import (
     Flask,
     render_template,
@@ -138,8 +140,30 @@ def seed_insignias_si_faltan():
     seed_insignias()
 
 
+class ProveedorJSONDinero(DefaultJSONProvider):
+    """Serializa los importes Decimal como números JSON.
+
+    Las columnas de dinero son Numeric y SQLAlchemy las devuelve como Decimal,
+    que el serializador de Flask no sabe convertir. Se emiten como número —no
+    como cadena— para no romper a los clientes que ya existen: la app móvil
+    tipa estos campos como `number` (questcash_mobile/src/types).
+
+    Es seguro: el defecto que corrige Numeric era el error ACUMULADO al sumar
+    repetidamente sobre el saldo, y esa aritmética ahora ocurre en Decimal
+    dentro de la base y de Python. Un importe suelto de dos decimales por
+    debajo de 2^53 centavos viaja por un `double` de JSON sin perder nada.
+    """
+
+    @staticmethod
+    def default(objeto):
+        if isinstance(objeto, Decimal):
+            return float(objeto)
+        return DefaultJSONProvider.default(objeto)
+
+
 def create_app():
     app = Flask(__name__)
+    app.json = ProveedorJSONDinero(app)
     app.config.from_object(Config)
 
     db.init_app(app)
@@ -513,7 +537,7 @@ def create_app():
                             )
                             .all()
                         )
-                        ahorro_30 = sum(m.monto for m in movs_30)
+                        ahorro_30 = float(sum(m.monto for m in movs_30) or 0)
                     except Exception:
                         ahorro_30 = 0
 
@@ -1278,7 +1302,7 @@ def create_app():
             .all()
         )
 
-        total_30_dias = sum(m.monto for m in movimientos_recientes)
+        total_30_dias = float(sum(m.monto for m in movimientos_recientes) or 0)
         if movimientos_recientes:
             ahorro_diario_promedio = total_30_dias / 30
             consejos.append({
@@ -1336,11 +1360,14 @@ def create_app():
             extra_diario = 0.0
 
         aportes_proyectados = extra_diario * dias_restantes
-        total_proyectado = quest.monto_actual + aportes_proyectados
-        if total_proyectado > quest.monto_objetivo:
-            total_proyectado = quest.monto_objetivo
+        # La simulación es una proyección aproximada, no un saldo: se trabaja
+        # en float. Mezclarlo con el Decimal de la columna daría TypeError.
+        objetivo = float(quest.monto_objetivo or 0)
+        total_proyectado = float(quest.monto_actual or 0) + aportes_proyectados
+        if total_proyectado > objetivo:
+            total_proyectado = objetivo
 
-        faltante = max(quest.monto_objetivo - total_proyectado, 0)
+        faltante = max(objetivo - total_proyectado, 0)
 
         # Probabilidad actual (misma lógica que en analizar_habitos_ahorro)
         if ritmo_necesario <= 0:
@@ -1427,7 +1454,7 @@ def create_app():
             ).all()
         )
 
-        total_ahorrado = sum(m.monto for m in movs_todos)
+        total_ahorrado = float(sum(m.monto for m in movs_todos) or 0)
         num_aportes = len(movs_todos)
 
         ahorro_por_quest = {}
@@ -1894,8 +1921,8 @@ def create_app():
             "porcentaje_ingreso_gastado": questy_home.get("porcentaje_ingreso_gastado", 0.0),
         }
 
-        total_objetivo = sum(q.monto_objetivo for q in quests) or 0
-        total_actual = sum(q.monto_actual for q in quests) or 0
+        total_objetivo = float(sum(q.monto_objetivo for q in quests) or 0)
+        total_actual = float(sum(q.monto_actual for q in quests) or 0)
 
         if total_objetivo > 0:
             progreso_global = int(total_actual / total_objetivo * 100)
@@ -2166,7 +2193,7 @@ def create_app():
             .all()
         )
 
-        total_mes = sum(g.monto for g in gastos) if gastos else 0
+        total_mes = float(sum(g.monto for g in gastos) or 0) if gastos else 0.0
 
         categorias = CategoriaGasto.query.order_by(CategoriaGasto.nombre).all()
 

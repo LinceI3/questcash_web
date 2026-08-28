@@ -1,4 +1,6 @@
 # models.py
+from decimal import Decimal
+
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.types import TypeDecorator
 from datetime import datetime, date
@@ -6,6 +8,24 @@ from datetime import datetime, date
 from crypto_utils import cifrar, descifrar, indice_ciego
 
 db = SQLAlchemy()
+
+# Tipo de todos los importes de dinero.
+#
+# Antes eran db.Float, que en Postgres es `double precision`: binario, incapaz
+# de representar exactamente la mayoría de los decimales, y con error que se
+# ACUMULA en cada suma sobre `monto_actual`. En una aplicación cuyo texto
+# principal es "te faltan $X para tu meta", eso produce centavos que aparecen y
+# desaparecen. Numeric es decimal exacto y no acumula error.
+#
+# 14 dígitos con 2 decimales: hasta 999,999,999,999.99 — muy por encima del
+# tope de 1,000,000,000 que imponen los validadores.
+#
+# SQLAlchemy devuelve estas columnas como decimal.Decimal. Nunca se deben
+# mezclar con float en una operación aritmética (Python lanza TypeError):
+# conviértase explícitamente con float() en el código de análisis, o manténgase
+# en Decimal en la ruta que mueve dinero.
+Dinero = db.Numeric(14, 2)
+CERO = Decimal("0.00")
 
 
 class TextoCifrado(TypeDecorator):
@@ -100,8 +120,8 @@ class Quest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nombre = db.Column(db.String(100), nullable=False)
     descripcion = db.Column(db.Text, nullable=True)
-    monto_objetivo = db.Column(db.Float, nullable=False)
-    monto_actual = db.Column(db.Float, nullable=False, default=0.0)
+    monto_objetivo = db.Column(Dinero, nullable=False)
+    monto_actual = db.Column(Dinero, nullable=False, default=CERO)
     fecha_limite = db.Column(db.Date, nullable=False)
     # 🔸 Fecha de creación del reto
     fecha_creacion = db.Column(db.Date, nullable=False, default=date.today)
@@ -143,9 +163,11 @@ class Quest(db.Model):
     )
 
     def progreso_porcentaje(self):
-        if self.monto_objetivo <= 0:
+        objetivo = self.monto_objetivo or CERO
+        if objetivo <= 0:
             return 0
-        return min(int((self.monto_actual / self.monto_objetivo) * 100), 100)
+        actual = self.monto_actual or CERO
+        return min(int((actual / objetivo) * 100), 100)
 
 
 class Movimiento(db.Model):
@@ -153,7 +175,7 @@ class Movimiento(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     tipo = db.Column(db.String(20), nullable=False)  # 'aporte' o 'retiro'
-    monto = db.Column(db.Float, nullable=False)
+    monto = db.Column(Dinero, nullable=False)
     fecha = db.Column(db.DateTime, default=datetime.utcnow)
     # La nota describe en texto libre en qué se ahorró o se retiró dinero:
     # es detalle financiero del usuario, va cifrada en reposo.
@@ -244,7 +266,7 @@ class Gasto(db.Model):
         db.Integer, db.ForeignKey("categorias_gasto.id"), nullable=False
     )
 
-    monto = db.Column(db.Float, nullable=False)
+    monto = db.Column(Dinero, nullable=False)
     # Descripción del gasto ("consulta médica", "pago del abogado"): puede
     # revelar hábitos y datos de salud o legales. Cifrada en reposo.
     descripcion = db.Column(TextoCifrado(1024))
