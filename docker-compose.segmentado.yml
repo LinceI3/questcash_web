@@ -74,6 +74,7 @@ services:
       ENTORNO: ${ENTORNO:-staging}
       # Hay exactamente un proxy delante (el gateway Nginx de este mismo archivo).
       PROXY_FIX_HOPS: 1
+      REDIS_URL: redis://cache:6379/0
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
       DATABASE_URL: postgresql://questcash:${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}@db:5432/questcash
       SECRET_KEY: ${SECRET_KEY:?define SECRET_KEY en .env}
@@ -85,6 +86,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      cache:
+        condition: service_healthy
     networks: [publica, privada]
     # Sin `ports:` — no se llega a Flask sin pasar por el gateway.
 
@@ -93,6 +96,20 @@ services:
   #  Sin `ports:`, en una red `internal`, y con la contraseña tomada del
   #  entorno en vez de estar escrita en el archivo.
   # -------------------------------------------------------------------
+  # Estado compartido del control de intentos. Vive en la red privada: no
+  # necesita salida a Internet ni ser alcanzable desde fuera.
+  cache:
+    image: redis:7-alpine
+    container_name: qc_cache_privada
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [privada]
+
   db:
     image: postgres:15
     container_name: qc_db_privada

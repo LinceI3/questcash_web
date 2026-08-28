@@ -41,6 +41,7 @@ services:
       BLIND_INDEX_KEY: ${BLIND_INDEX_KEY:?define BLIND_INDEX_KEY en .env}
 
       # --- Ajustes propios de desarrollo ---------------------------------
+      REDIS_URL: redis://cache:6379/0
       GUNICORN_WORKERS: 1
       GUNICORN_RELOAD: 1
       PYTHONDONTWRITEBYTECODE: 1
@@ -53,6 +54,8 @@ services:
       - .:/app
     depends_on:
       db:
+        condition: service_healthy
+      cache:
         condition: service_healthy
 
   db:
@@ -71,6 +74,20 @@ services:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Estado compartido entre procesos: control de intentos de inicio de sesión.
+  # Sin esto, cada worker de gunicorn lleva su propia cuenta y un atacante
+  # dispone de tantos intentos como workers haya.
+  cache:
+    image: redis:7-alpine
+    container_name: questcash_cache
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10

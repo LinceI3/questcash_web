@@ -14,6 +14,7 @@ from flask import Blueprint, g, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash  # noqa: F401 (compatibilidad)
 from password_hashing import hashear_password, necesita_rehash, verificar_password
 
+import rate_limit
 from auth_jwt import generate_token, jwt_required
 from ia.services.questy_engine import evaluate_quest
 from models import (
@@ -194,7 +195,6 @@ def register_api(app, csrf, ctx):
     humanizar_segmento_questy = ctx["humanizar_segmento_questy"]
     obtener_o_crear_categoria_gasto = ctx["obtener_o_crear_categoria_gasto"]
     procesar_registro_movimiento = ctx["procesar_registro_movimiento"]
-    intentos_login = ctx["intentos_login"]
     MAX_LOGIN_INTENTOS = ctx["MAX_LOGIN_INTENTOS"]
     BLOQUEO_MINUTOS = ctx["BLOQUEO_MINUTOS"]
 
@@ -247,19 +247,17 @@ def register_api(app, csrf, ctx):
         password = data.get("password") or ""
 
         ip = request.remote_addr or "unknown"
-        clave = f"{correo}|{ip}"
-        ahora = datetime.utcnow()
 
-        # Comparte el mismo estado de bloqueo que el login web (mismo dict en memoria),
-        # para no abrir un segundo vector de fuerza bruta contra la misma cuenta.
-        intento = intentos_login.get(clave)
-        if intento and intento.get("bloqueado_hasta") and ahora < intento["bloqueado_hasta"]:
-            restante = int((intento["bloqueado_hasta"] - ahora).total_seconds())
-            return jsonify({"error": "locked", "retry_after_seconds": max(restante, 1)}), 429
+        # Comparte el mismo estado de bloqueo que el login web —ahora en Redis,
+        # no en un diccionario de proceso— para no abrir un segundo vector de
+        # fuerza bruta contra la misma cuenta desde la API.
+        bloqueo = rate_limit.segundos_de_bloqueo(correo, ip)
+        if bloqueo:
+            return jsonify({"error": "locked", "retry_after_seconds": max(bloqueo, 1)}), 429
 
         usuario = Usuario.por_correo(correo)
         if usuario and verificar_password(usuario.password_hash, password):
-            intentos_login.pop(clave, None)
+            rate_limit.registrar_exito(correo, ip)
 
             # Re-hash oportunista si la cuenta venía con parámetros antiguos.
             if necesita_rehash(usuario.password_hash):
@@ -269,13 +267,7 @@ def register_api(app, csrf, ctx):
             rank_state = _augment_rank_state(calcular_estado_rango_perfil(usuario.puntos_totales or 0))
             return jsonify({"token": token, "user": serialize_user(usuario), "rank_state": rank_state})
 
-        intento = intentos_login.get(clave, {"intentos": 0, "bloqueado_hasta": None})
-        intento["intentos"] = intento.get("intentos", 0) + 1
-        if intento["intentos"] >= MAX_LOGIN_INTENTOS:
-            intento["bloqueado_hasta"] = ahora + timedelta(minutes=BLOQUEO_MINUTOS)
-        intentos_login[clave] = intento
-
-        restantes = max(MAX_LOGIN_INTENTOS - intento["intentos"], 0)
+        restantes, _ = rate_limit.registrar_fallo(correo, ip)
         return jsonify({"error": "invalid_credentials", "attempts_remaining": restantes}), 401
 
     @api_bp.route("/auth/me", methods=["GET"])

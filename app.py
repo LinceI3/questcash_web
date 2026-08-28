@@ -47,14 +47,17 @@ from validators import (
     validar_gasto,
 )
 from api import register_api
+import rate_limit
 
 csrf = CSRFProtect()
 migrate = Migrate()
 
-# ----------------- Control de intentos de login (anti fuerza bruta) -----------------
-MAX_LOGIN_INTENTOS = 5
-BLOQUEO_MINUTOS = 5
-intentos_login = {}  # clave: correo+ip, valor: {"intentos": int, "bloqueado_hasta": datetime}
+# El control de intentos vive ahora en rate_limit.py, con el estado en Redis:
+# el diccionario que había aquí no se compartía entre workers (cada uno daba
+# sus propios 5 intentos) y no se limpiaba nunca (crecía sin límite con cada
+# correo probado). Ver rate_limit.py para el detalle.
+MAX_LOGIN_INTENTOS = rate_limit.MAX_INTENTOS
+BLOQUEO_MINUTOS = rate_limit.BLOQUEO_SEGUNDOS // 60
 
 
 # ----------------- Insignias: semillas y helpers -----------------
@@ -1911,16 +1914,11 @@ def create_app():
             correo = request.form.get("correo", "").strip().lower()
             password = request.form.get("password", "")
 
-            # Clave para controlar intentos por correo + IP
             ip = request.remote_addr or "unknown"
-            clave_intento = f"{correo}|{ip}"
 
-            ahora = datetime.utcnow()
-            datos_intento = intentos_login.get(clave_intento)
-
-            # Verificar si está bloqueado temporalmente
-            if datos_intento and datos_intento.get("bloqueado_hasta") and ahora < datos_intento["bloqueado_hasta"]:
-                minutos_restantes = int((datos_intento["bloqueado_hasta"] - ahora).total_seconds() // 60) + 1
+            bloqueo = rate_limit.segundos_de_bloqueo(correo, ip)
+            if bloqueo:
+                minutos_restantes = bloqueo // 60 + 1
                 flash(
                     f"Has excedido el número de intentos. Intenta de nuevo en aproximadamente {minutos_restantes} minuto(s).",
                     "danger",
@@ -1930,8 +1928,8 @@ def create_app():
             usuario = Usuario.por_correo(correo)
 
             if usuario and verificar_password(usuario.password_hash, password):
-                # Login exitoso: limpiar intentos fallidos
-                intentos_login.pop(clave_intento, None)
+                # Login exitoso: se olvida todo lo anterior
+                rate_limit.registrar_exito(correo, ip)
 
                 # Si la cuenta traía un hash con parámetros antiguos, este es
                 # el único momento en que existe la contraseña en claro:
@@ -1945,26 +1943,17 @@ def create_app():
                 flash(f"¡Bienvenido de nuevo, {usuario.nombre}!", "success")
                 return redirect(url_for("dashboard"))
             else:
-                # Login fallido: incrementar contador
-                if not datos_intento:
-                    datos_intento = {"intentos": 0, "bloqueado_hasta": None}
-
-                datos_intento["intentos"] += 1
-
-                if datos_intento["intentos"] >= MAX_LOGIN_INTENTOS:
-                    datos_intento["bloqueado_hasta"] = ahora + timedelta(minutes=BLOQUEO_MINUTOS)
+                faltan, bloqueado = rate_limit.registrar_fallo(correo, ip)
+                if bloqueado:
                     flash(
                         "Demasiados intentos fallidos. Tu acceso se ha bloqueado temporalmente por unos minutos.",
                         "danger",
                     )
                 else:
-                    faltan = MAX_LOGIN_INTENTOS - datos_intento["intentos"]
                     flash(
                         f"Correo o contraseña incorrectos. Intentos restantes antes de bloqueo: {faltan}.",
                         "danger",
                     )
-
-                intentos_login[clave_intento] = datos_intento
                 return render_template("auth/login.html")
 
         return render_template("auth/login.html")
@@ -2908,7 +2897,6 @@ def create_app():
         "humanizar_segmento_questy": humanizar_segmento_questy,
         "obtener_o_crear_categoria_gasto": obtener_o_crear_categoria_gasto,
         "procesar_registro_movimiento": procesar_registro_movimiento,
-        "intentos_login": intentos_login,
         "MAX_LOGIN_INTENTOS": MAX_LOGIN_INTENTOS,
         "BLOQUEO_MINUTOS": BLOQUEO_MINUTOS,
     }
