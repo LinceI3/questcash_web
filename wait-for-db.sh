@@ -15,6 +15,15 @@ while ! nc -z "$DB_HOST" "$DB_PORT"; do
 done
 echo "Base de datos lista"
 
+# Migraciones como paso EXPLÍCITO del despliegue, antes de servir tráfico.
+# Antes esto vivía dentro de app.py y corría al importar el módulo: sin
+# historial, sin reversión y con los workers compitiendo por ejecutar DDL.
+# Si falla, el contenedor no arranca — es preferible a servir con un esquema
+# a medias (`set -e` está activo arriba).
+echo "Preparando la base de datos..."
+python scripts/preparar_bd.py
+
+
 # Recarga automática al cambiar un .py. SOLO desarrollo: gunicorn vigila el
 # sistema de archivos, lo que cuesta CPU y no tiene sentido en producción,
 # donde el código de la imagen no cambia. Lo activa docker-compose.yml.

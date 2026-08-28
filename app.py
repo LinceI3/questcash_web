@@ -18,6 +18,7 @@ import re
 
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import generate_csrf
+from flask_migrate import Migrate
 
 from config import Config
 from models import (
@@ -45,6 +46,7 @@ from validators import (
 from api import register_api
 
 csrf = CSRFProtect()
+migrate = Migrate()
 
 # ----------------- Control de intentos de login (anti fuerza bruta) -----------------
 MAX_LOGIN_INTENTOS = 5
@@ -129,67 +131,11 @@ def crear_notificacion(usuario, tipo, titulo, mensaje, icono=None, color=None, q
     return notif
 
 
-def _ensure_schema():
-    """Agrega columnas nuevas a tablas ya existentes.
-
-    El proyecto no usa un framework de migraciones (Alembic): db.create_all()
-    solo crea tablas que faltan, no altera las que ya existen. Esto corre un
-    ALTER TABLE best-effort para columnas agregadas después del despliegue
-    inicial, ignorando el error si la columna ya existe (idempotente, seguro
-    de correr en cada arranque tanto en SQLite local como en Postgres).
-    """
-    statements = [
-        "ALTER TABLE quests ADD COLUMN icono VARCHAR(30)",
-    ]
-    for statement in statements:
-        try:
-            db.session.execute(db.text(statement))
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-
-
-# Clave arbitraria y fija del advisory lock de arranque. Solo tiene que ser
-# la misma en todos los procesos de QuestCash y no chocar con otro uso.
-_BOOTSTRAP_LOCK_KEY = 728451903
-
-
-def _bootstrap_esquema():
-    """Crea las tablas y siembra las insignias base, una sola vez por arranque.
-
-    Con más de un worker de gunicorn, todos importan este módulo a la vez y
-    ejecutaban `db.create_all()` en paralelo. Postgres rechaza al segundo con
-    UniqueViolation sobre `pg_class` (la secuencia ya existe) y el worker muere
-    antes de atender nada; con `--workers 2` eso tumba el arranque entero. El
-    servidor de desarrollo nunca lo destapó porque es un solo proceso.
-
-    Se toma un advisory lock para que solo un proceso haga el trabajo y el
-    resto espere a que termine; cuando entran, `create_all` y `seed_insignias`
-    ya no tienen nada que hacer y son no-ops.
-
-    MEDIDA PUENTE: el destino es Alembic con la migración como paso explícito
-    del despliegue, fuera del arranque de la aplicación. Esto solo hace que el
-    esquema actual sobreviva a varios workers sin cambiar cómo se gestiona.
-    """
-    es_postgres = db.engine.dialect.name == "postgresql"
-
-    if not es_postgres:
-        # SQLite en local: un solo proceso, no hay carrera que serializar.
-        db.create_all()
-        _ensure_schema()
-        seed_insignias()
-        return
-
-    with db.engine.connect() as conn:
-        conn.execute(db.text("SELECT pg_advisory_lock(:clave)"), {"clave": _BOOTSTRAP_LOCK_KEY})
-        conn.commit()
-        try:
-            db.create_all()
-            _ensure_schema()
-            seed_insignias()
-        finally:
-            conn.execute(db.text("SELECT pg_advisory_unlock(:clave)"), {"clave": _BOOTSTRAP_LOCK_KEY})
-            conn.commit()
+def seed_insignias_si_faltan():
+    """Siembra las insignias base. Es datos, no esquema: la ejecuta
+    scripts/preparar_bd.py después de aplicar las migraciones, no el arranque
+    de la aplicación. Idempotente."""
+    seed_insignias()
 
 
 def create_app():
@@ -197,6 +143,7 @@ def create_app():
     app.config.from_object(Config)
 
     db.init_app(app)
+    migrate.init_app(app, db)
     csrf.init_app(app)
 
     @app.context_processor
@@ -2834,9 +2781,13 @@ def create_app():
     }
     register_api(app, csrf, api_ctx)
 
-    # Crear tablas + insignias base al finalizar la configuración de la app
-    with app.app_context():
-        _bootstrap_esquema()
+    # El esquema NO se toca al arrancar. Las migraciones son un paso
+    # explícito del despliegue: `flask db upgrade`, que corre
+    # scripts/preparar_bd.py desde wait-for-db.sh antes de levantar gunicorn.
+    #
+    # Antes aquí vivían db.create_all() + un ALTER TABLE best-effort. Eso no
+    # dejaba historial, no se podía revertir ni revisar en un pull request, y
+    # con varios workers los procesos competían ejecutando DDL a la vez.
     return app
 
 app = create_app()
