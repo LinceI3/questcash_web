@@ -1760,6 +1760,37 @@ def create_app():
                 if hoy <= quest.fecha_limite:
                     otorgar_insignia("META_A_TIEMPO", usuario, events=events)
 
+    def bloquear_quest(quest_id):
+        """Relee la meta tomando un bloqueo de fila hasta el fin de la transacción.
+
+        `quest.monto_actual += monto` es leer-modificar-escribir. Sin bloqueo,
+        dos aportes simultáneos sobre la misma meta —dos colaboradores a la vez,
+        o un doble toque en el móvil— leen el mismo saldo de partida y el
+        segundo pisa al primero: un aporte desaparece. En una meta cerca de
+        completarse puede además otorgar los puntos de completado dos veces.
+
+        SELECT ... FOR UPDATE hace que el segundo proceso espere a que el
+        primero confirme, y entonces lea el saldo ya actualizado.
+
+        En SQLite (desarrollo local) `with_for_update()` se ignora en silencio;
+        no importa porque allí no hay concurrencia real.
+        """
+        return (
+            Quest.query
+            .filter_by(id=quest_id)
+            # populate_existing() es imprescindible, no un adorno. Sin él,
+            # SQLAlchemy ejecuta el SELECT ... FOR UPDATE —así que el bloqueo
+            # SÍ se toma— pero devuelve la instancia que ya estaba en el mapa
+            # de identidad de la sesión, con su monto_actual obsoleto, y
+            # descarta los valores recién leídos. El resultado es que el
+            # bloqueo no sirve de nada: cada proceso sigue sumando sobre el
+            # saldo que leyó antes de esperar. Con 4 workers y 25 aportes
+            # simultáneos se perdían 17.
+            .populate_existing()
+            .with_for_update()
+            .first()
+        )
+
     def procesar_registro_movimiento(usuario, quest, tipo, monto_float, nota, categoria, events=None):
         """Registra un movimiento (aporte/retiro) sobre una meta: crea el Movimiento,
         actualiza monto/estatus de la meta, recalcula la recompensa vía IA (con
@@ -1769,6 +1800,14 @@ def create_app():
         `crear_movimiento`, y la reutiliza también la API JSON. No hace commit;
         el caller es responsable de eso.
         """
+        # Bloqueo de la fila ANTES de leer el saldo: a partir de aquí ningún
+        # otro proceso puede modificar esta meta hasta que se confirme la
+        # transacción. Se relee la instancia bloqueada para no operar sobre una
+        # copia con datos ya obsoletos.
+        bloqueada = bloquear_quest(quest.id)
+        if bloqueada is not None:
+            quest = bloqueada
+
         rachas_antes = calcular_rachas_usuario(usuario)
 
         movimiento = Movimiento(

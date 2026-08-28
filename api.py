@@ -119,14 +119,23 @@ def serialize_insignia(insignia, obtenida, fecha_obtenida=None):
 
 
 def serialize_participacion(participacion):
+    """Datos de un participante visibles para el resto de la meta.
+
+    NO incluye el correo. Antes sí, y lo recibía cualquier otro participante a
+    través de GET /quests/<id> —basta con participar, no hace falta ser el
+    creador—, así que la dirección de una persona quedaba expuesta a terceros
+    con los que nunca acordó compartirla. El nombre y el alias son lo que hace
+    falta para saber quién aportó a una meta compartida.
+    """
+    usuario = participacion.usuario
     return {
         "id": participacion.id,
         "rol": participacion.rol,
         "fecha_union": participacion.fecha_union.isoformat() if participacion.fecha_union else None,
         "usuario": {
-            "id": participacion.usuario.id,
-            "nombre": participacion.usuario.nombre,
-            "correo": participacion.usuario.correo,
+            "id": usuario.id,
+            "nombre": usuario.nombre,
+            "alias": usuario.alias,
         },
     }
 
