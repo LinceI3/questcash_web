@@ -1,27 +1,79 @@
-version: '3.8'
+# =====================================================================
+#  QuestCash — entorno de DESARROLLO local.
+#
+#  Este archivo es para trabajar en la máquina, no para producción. La
+#  definición parecida a producción vive en docker-compose.segmentado.yml
+#  (gunicorn con varios workers, Postgres sin puertos publicados en una red
+#  interna y un solo puerto de entrada por el gateway Nginx).
+#
+#  Diferencias deliberadas respecto a producción:
+#    - el código se monta como volumen y gunicorn corre con --reload, así que
+#      un cambio en un .py se aplica solo: no hay que reconstruir la imagen;
+#    - un solo worker, que hace la recarga más rápida;
+#    - el puerto de la aplicación se publica en 5001, que es el que la app
+#      móvil ya busca (src/services/api.ts).
+#
+#  NINGÚN SECRETO ESTÁ ESCRITO AQUÍ. Todos vienen de .env, que no se versiona.
+#  Si falta alguno, el arranque falla con un mensaje claro en vez de usar un
+#  valor por omisión inseguro.
+#
+#  Uso:
+#      docker compose up          # levanta y sigue los logs
+#      docker compose up -d       # en segundo plano
+#      docker compose down        # detiene (conserva los datos)
+# =====================================================================
+name: questcash
 
 services:
   web:
     build: .
     container_name: questcash_web
-    ports:
-      - "80:5000"
+    restart: unless-stopped
     environment:
-      - DATABASE_URL=postgresql://questcash:PURGADO-ROTAR-EN-RENDER@db:5432/questcash
-      - SECRET_KEY=PURGADO-ROTAR-EN-RENDER
+      # --- Base de datos: se arma desde las piezas de .env ---------------
+      DATABASE_URL: postgresql://${POSTGRES_USER:?define POSTGRES_USER en .env}:${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}@db:5432/${POSTGRES_DB:?define POSTGRES_DB en .env}
+      DB_HOST: db
+
+      # --- Secretos: obligatorios, sin valor por omisión -----------------
+      SECRET_KEY: ${SECRET_KEY:?define SECRET_KEY en .env}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?define JWT_SECRET_KEY en .env}
+      DATA_ENC_KEY: ${DATA_ENC_KEY:?define DATA_ENC_KEY en .env — sin ella el cifrado se deriva de SECRET_KEY}
+      BLIND_INDEX_KEY: ${BLIND_INDEX_KEY:?define BLIND_INDEX_KEY en .env}
+
+      # --- Ajustes propios de desarrollo ---------------------------------
+      GUNICORN_WORKERS: 1
+      GUNICORN_RELOAD: 1
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+    ports:
+      # 5001 en el anfitrión: es el puerto que espera la app móvil.
+      - "5001:5000"
+    volumes:
+      # El código en vivo. Con --reload, editar un .py recarga el worker.
+      - .:/app
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   db:
     image: postgres:15
     container_name: questcash_db
-    restart: always
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: questcash
-      POSTGRES_PASSWORD: PURGADO-ROTAR-EN-RENDER
-      POSTGRES_DB: questcash
+      POSTGRES_USER: ${POSTGRES_USER:?define POSTGRES_USER en .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}
+      POSTGRES_DB: ${POSTGRES_DB:?define POSTGRES_DB en .env}
+    ports:
+      # Publicado solo en el loopback: accesible con psql desde la Mac, no
+      # desde la red local. En producción no se publica en absoluto.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   postgres_data:

@@ -15,6 +15,15 @@ while ! nc -z "$DB_HOST" "$DB_PORT"; do
 done
 echo "Base de datos lista"
 
+# Recarga automática al cambiar un .py. SOLO desarrollo: gunicorn vigila el
+# sistema de archivos, lo que cuesta CPU y no tiene sentido en producción,
+# donde el código de la imagen no cambia. Lo activa docker-compose.yml.
+RELOAD=""
+if [ "${GUNICORN_RELOAD:-0}" = "1" ]; then
+  RELOAD="--reload"
+  echo "gunicorn con --reload: los cambios en .py se aplican sin reconstruir"
+fi
+
 # `exec` deja a gunicorn como PID 1 para que reciba SIGTERM directamente
 # y cierre las conexiones de forma ordenada al parar el contenedor.
 exec gunicorn \
@@ -24,4 +33,5 @@ exec gunicorn \
   --graceful-timeout 30 \
   --access-logfile - \
   --error-logfile - \
+  $RELOAD \
   app:app
