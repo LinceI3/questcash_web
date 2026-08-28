@@ -458,6 +458,48 @@ class Gasto(MarcasDeTiempo, db.Model):
         return f"<Gasto {self.monto} {self.categoria_id} {self.fecha}>"
 
 
+class ClaveIdempotencia(MarcasDeTiempo, db.Model):
+    """Respuesta ya emitida para una operación que el cliente puede repetir.
+
+    El bloqueo de fila arregló los aportes PERDIDOS. No arregla los
+    DUPLICADOS: un doble toque en el móvil o un reintento tras un timeout
+    envían dos peticiones que, desde el servidor, son dos operaciones legítimas
+    e indistinguibles. El resultado es un aporte cobrado dos veces.
+
+    La única forma de distinguirlas es que el cliente diga "esta es la misma
+    operación que la anterior", y eso es una cabecera `Idempotency-Key`: un
+    identificador que genera al preparar la operación y reutiliza en cada
+    reintento. Si la clave ya se usó, se devuelve la respuesta guardada en vez
+    de ejecutar de nuevo.
+
+    La clave se guarda junto al usuario y al endpoint: una clave repetida entre
+    usuarios distintos, o entre operaciones distintas, no debe colisionar.
+
+    Las filas caducan; conviene una limpieza periódica de las expiradas cuando
+    exista un planificador de tareas.
+    """
+
+    __tablename__ = "claves_idempotencia"
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+    clave = db.Column(db.String(128), nullable=False)
+    endpoint = db.Column(db.String(120), nullable=False)
+
+    codigo_http = db.Column(db.Integer, nullable=False)
+    respuesta = db.Column(db.Text, nullable=False)
+    expira_en = db.Column(db.DateTime(timezone=True), nullable=False)
+
+    usuario = db.relationship("Usuario")
+
+    __table_args__ = (
+        # La unicidad es lo que hace el trabajo: dos peticiones simultáneas con
+        # la misma clave compiten por insertar, y la segunda choca contra esta
+        # restricción en vez de ejecutar la operación.
+        db.UniqueConstraint("usuario_id", "endpoint", "clave", name="uq_idempotencia"),
+    )
+
+
 class Notificacion(MarcasDeTiempo, db.Model):
     """Notificaciones persistidas, disparadas por eventos reales (meta
     completada, insignia nueva, aporte de un colaborador). Las notificaciones

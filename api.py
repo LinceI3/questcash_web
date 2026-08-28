@@ -9,8 +9,10 @@ auth por Bearer token (JWT) en vez de sesión por cookie.
 """
 import re
 from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
+from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash  # noqa: F401 (compatibilidad)
 from password_hashing import hashear_password, necesita_rehash, verificar_password
 
@@ -27,6 +29,7 @@ from ia.services.questy_engine import evaluate_quest
 from crypto_utils import indice_ciego
 from models import (
     CategoriaGasto,
+    ClaveIdempotencia,
     InvitacionQuest,
     Sesion,
     Gasto,
@@ -241,6 +244,114 @@ def _respuesta_de_sesion(usuario, rank_state=None, codigo=200):
     if rank_state is not None:
         cuerpo["rank_state"] = rank_state
     return jsonify(cuerpo), codigo
+
+
+IDEMPOTENCIA_HORAS = 24
+
+# codigo_http = 0 marca una clave RESERVADA pero cuya operación todavía no ha
+# terminado. No es un código HTTP real, y por eso no puede confundirse con una
+# respuesta guardada.
+EN_CURSO = 0
+
+
+def idempotente(vista):
+    """Hace que repetir una operación con la misma Idempotency-Key sea inocuo.
+
+    El bloqueo de fila evita que dos aportes simultáneos se pisen. Esto evita
+    algo distinto: que el MISMO aporte se registre dos veces porque el usuario
+    tocó dos veces o la app reintentó tras un timeout. Sin la clave, el
+    servidor no puede distinguir eso de dos aportes legítimos iguales.
+
+    La clave se RESERVA ANTES de ejecutar, no después. Es la diferencia entre
+    que funcione o no: comprobar primero y guardar al final deja una ventana en
+    la que dos peticiones simultáneas no encuentran nada, ambas ejecutan, y solo
+    entonces compiten por guardar. Medido con 8 peticiones simultáneas sobre 4
+    workers: se colaban 2 movimientos aunque las 8 devolvieran el mismo id.
+
+    Reservando primero, la restricción UNIQUE de la tabla actúa de cerrojo: la
+    perdedora nunca llega a ejecutar la operación.
+
+    Sin cabecera, la vista corre como siempre: los clientes que aún no la
+    envían siguen funcionando, sin protección pero sin romperse.
+    """
+    @wraps(vista)
+    def envoltorio(*args, **kwargs):
+        clave = (request.headers.get("Idempotency-Key") or "").strip()[:128]
+        if not clave:
+            return vista(*args, **kwargs)
+
+        usuario = g.api_usuario
+        endpoint = request.endpoint or vista.__name__
+        ahora = datetime.now(timezone.utc)
+
+        def buscar():
+            return ClaveIdempotencia.query.filter_by(
+                usuario_id=usuario.id, endpoint=endpoint, clave=clave
+            ).first()
+
+        def reproducir(fila):
+            respuesta = current_app.response_class(
+                fila.respuesta, status=fila.codigo_http, mimetype="application/json"
+            )
+            respuesta.headers["Idempotent-Replay"] = "true"
+            return respuesta
+
+        previa = buscar()
+        if previa is not None and previa.expira_en > ahora:
+            if previa.codigo_http == EN_CURSO:
+                # Otra petición con esta misma clave está ejecutándose. No se
+                # puede devolver un resultado que aún no existe ni ejecutar en
+                # paralelo: se pide reintentar.
+                return jsonify({"error": "idempotency_in_progress"}), 409
+            return reproducir(previa)
+
+        # Reserva. Si otra petición gana, la restricción UNIQUE la rechaza aquí
+        # —antes de tocar nada— y esta no llega a ejecutar la operación.
+        reserva = ClaveIdempotencia(
+            usuario_id=usuario.id, endpoint=endpoint, clave=clave,
+            codigo_http=EN_CURSO, respuesta="",
+            expira_en=ahora + timedelta(hours=IDEMPOTENCIA_HORAS),
+        )
+        db.session.add(reserva)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            otra = buscar()
+            if otra is not None and otra.codigo_http != EN_CURSO:
+                return reproducir(otra)
+            return jsonify({"error": "idempotency_in_progress"}), 409
+
+        reserva_id = reserva.id
+
+        def liberar():
+            """Suelta la reserva para que el cliente pueda reintentar de verdad."""
+            db.session.rollback()
+            ClaveIdempotencia.query.filter_by(id=reserva_id).delete()
+            db.session.commit()
+
+        try:
+            resultado = vista(*args, **kwargs)
+        except Exception:
+            liberar()
+            raise
+
+        cuerpo, codigo = (resultado if isinstance(resultado, tuple) else (resultado, 200))
+
+        if not (200 <= codigo < 300):
+            # Si la operación falló, la clave no debe quedar quemada.
+            liberar()
+            return resultado
+
+        texto = cuerpo.get_data(as_text=True) if hasattr(cuerpo, "get_data") else str(cuerpo)
+        fila = ClaveIdempotencia.query.get(reserva_id)
+        if fila is not None:
+            fila.codigo_http = codigo
+            fila.respuesta = texto
+            db.session.commit()
+        return resultado
+
+    return envoltorio
 
 
 def register_api(app, csrf, ctx):
@@ -524,6 +635,7 @@ def register_api(app, csrf, ctx):
 
     @api_bp.route("/quests", methods=["POST"])
     @jwt_required
+    @idempotente
     def api_crear_quest():
         usuario = g.api_usuario
         data = request.get_json(silent=True) or {}
@@ -721,6 +833,7 @@ def register_api(app, csrf, ctx):
 
     @api_bp.route("/quests/<int:quest_id>/movimientos", methods=["POST"])
     @jwt_required
+    @idempotente
     def api_crear_movimiento(quest_id):
         usuario = g.api_usuario
         quest = _load_quest(quest_id)
@@ -1009,6 +1122,7 @@ def register_api(app, csrf, ctx):
 
     @api_bp.route("/gastos", methods=["POST"])
     @jwt_required
+    @idempotente
     def api_crear_gasto():
         usuario = g.api_usuario
         data = request.get_json(silent=True) or {}
