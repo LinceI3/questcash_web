@@ -36,6 +36,7 @@ from models import (
     Notificacion,
 )
 
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash  # noqa: F401 (compatibilidad)
 from password_hashing import hashear_password, necesita_rehash, verificar_password
 from ia.services.questy_engine import QuestyInput, evaluate_quest
@@ -165,6 +166,20 @@ def create_app():
     app = Flask(__name__)
     app.json = ProveedorJSONDinero(app)
     app.config.from_object(Config)
+
+    # Detrás de un proxy inverso (el gateway Nginx, o el de Render), la
+    # dirección que ve Flask es la del proxy, no la del usuario. Eso importa
+    # porque el control de intentos de inicio de sesión agrupa por correo+IP:
+    # con todas las peticiones llegando desde la misma IP, un atacante agota
+    # los intentos de cualquier cuenta y de paso bloquea a los demás.
+    #
+    # ProxyFix hace que request.remote_addr y request.scheme salgan de
+    # X-Forwarded-For / X-Forwarded-Proto. Va DESACTIVADO por omisión y se
+    # activa con PROXY_FIX_HOPS=1: confiar en esas cabeceras sin un proxy
+    # delante permitiría a cualquiera falsificar su IP enviándolas él mismo.
+    saltos = int(os.environ.get("PROXY_FIX_HOPS", "0"))
+    if saltos > 0:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=saltos, x_proto=saltos, x_host=saltos)
 
     db.init_app(app)
     migrate.init_app(app, db)

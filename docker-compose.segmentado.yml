@@ -49,7 +49,9 @@ services:
     ports:
       - "8443:80"                    # en producción: 443 con TLS
     volumes:
-      - ./lab-semana3/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Configuración propia de esta topología. La de lab-semana3/ es del
+      # balanceador de dos instancias y apunta a api1/api2, que aquí no existen.
+      - ./deploy/nginx/questcash.conf:/etc/nginx/nginx.conf:ro
     depends_on: [web]
     networks: [publica]
 
@@ -64,13 +66,16 @@ services:
       dockerfile: Dockerfile
     container_name: qc_web
     restart: unless-stopped
-    command: >
-      gunicorn --bind 0.0.0.0:5000
-               --workers 2
-               --access-logfile -
-               app:app
+    # Sin `command:`: se usa el entrypoint de la imagen (wait-for-db.sh), que
+    # espera a Postgres, APLICA LAS MIGRACIONES y solo entonces entrega el
+    # proceso a gunicorn. Sobrescribir el comando aquí saltaría el paso de
+    # migración y la pila levantaría contra un esquema inexistente.
     environment:
-      DATABASE_URL: postgresql://questcash:${POSTGRES_PASSWORD:-cambiame}@db:5432/questcash
+      ENTORNO: ${ENTORNO:-staging}
+      # Hay exactamente un proxy delante (el gateway Nginx de este mismo archivo).
+      PROXY_FIX_HOPS: 1
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+      DATABASE_URL: postgresql://questcash:${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}@db:5432/questcash
       SECRET_KEY: ${SECRET_KEY:?define SECRET_KEY en .env}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?define JWT_SECRET_KEY en .env}
       # Claves del cifrado en reposo. Nunca se versionan: viven en .env
