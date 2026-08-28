@@ -8,17 +8,25 @@ módulo solo traduce esas mismas funciones a peticiones/respuestas JSON con
 auth por Bearer token (JWT) en vez de sesión por cookie.
 """
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from flask import Blueprint, g, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash  # noqa: F401 (compatibilidad)
 from password_hashing import hashear_password, necesita_rehash, verificar_password
 
 import rate_limit
-from auth_jwt import generate_token, jwt_required
+from auth_jwt import (
+    canjear_refresh_token,
+    emitir_refresh_token,
+    generar_access_token,
+    jwt_required,
+    revocar_refresh_token,
+    revocar_todas_las_sesiones,
+)
 from ia.services.questy_engine import evaluate_quest
 from models import (
     CategoriaGasto,
+    Sesion,
     Gasto,
     Insignia,
     Movimiento,
@@ -176,6 +184,35 @@ def serialize_notificacion_dinamica(item):
     }
 
 
+def _dispositivo_de_la_peticion():
+    """Etiqueta legible del cliente, para la pantalla de sesiones activas."""
+    return (request.headers.get("X-Dispositivo") or request.headers.get("User-Agent") or "")[:120]
+
+
+def _respuesta_de_sesion(usuario, rank_state=None, codigo=200):
+    """Cuerpo común de login, registro y refresh.
+
+    `token` se mantiene como alias del access token: es el campo que consumen
+    los clientes ya publicados y quitarlo los rompería de golpe. Los nuevos
+    deben usar `access_token` y `refresh_token`.
+    """
+    access, expira_en = generar_access_token(usuario)
+    refresh, _ = emitir_refresh_token(usuario, _dispositivo_de_la_peticion())
+    db.session.commit()
+
+    cuerpo = {
+        "access_token": access,
+        "refresh_token": refresh,
+        "expires_in": expira_en,
+        "token_type": "Bearer",
+        "token": access,          # alias de compatibilidad
+        "user": serialize_user(usuario),
+    }
+    if rank_state is not None:
+        cuerpo["rank_state"] = rank_state
+    return jsonify(cuerpo), codigo
+
+
 def register_api(app, csrf, ctx):
     api_bp = Blueprint("api", __name__, url_prefix="/api/v1")
 
@@ -235,10 +272,9 @@ def register_api(app, csrf, ctx):
         # set_correo cifra el correo y calcula su índice ciego.
         usuario.set_correo(correo)
         db.session.add(usuario)
-        db.session.commit()
+        db.session.flush()
 
-        token = generate_token(usuario.id)
-        return jsonify({"token": token, "user": serialize_user(usuario)}), 201
+        return _respuesta_de_sesion(usuario, codigo=201)
 
     @api_bp.route("/auth/login", methods=["POST"])
     def api_login():
@@ -263,9 +299,8 @@ def register_api(app, csrf, ctx):
             if necesita_rehash(usuario.password_hash):
                 usuario.password_hash = hashear_password(password)
                 db.session.commit()
-            token = generate_token(usuario.id)
             rank_state = _augment_rank_state(calcular_estado_rango_perfil(usuario.puntos_totales or 0))
-            return jsonify({"token": token, "user": serialize_user(usuario), "rank_state": rank_state})
+            return _respuesta_de_sesion(usuario, rank_state=rank_state)
 
         restantes, _ = rate_limit.registrar_fallo(correo, ip)
         return jsonify({"error": "invalid_credentials", "attempts_remaining": restantes}), 401
@@ -276,6 +311,83 @@ def register_api(app, csrf, ctx):
         usuario = g.api_usuario
         rank_state = _augment_rank_state(calcular_estado_rango_perfil(usuario.puntos_totales or 0))
         return jsonify({"user": serialize_user(usuario), "rank_state": rank_state})
+
+    @api_bp.route("/auth/refresh", methods=["POST"])
+    def api_refresh():
+        """Canjea un refresh token por un par nuevo.
+
+        No lleva @jwt_required a propósito: el cliente llega aquí justamente
+        porque su access token caducó. La credencial es el refresh.
+        """
+        data = request.get_json(silent=True) or {}
+        crudo = (data.get("refresh_token") or "").strip()
+
+        usuario, nuevo_refresh = canjear_refresh_token(crudo, _dispositivo_de_la_peticion())
+        if usuario is None:
+            # El refresh no existe, ya se usó, se revocó o caducó. El cliente
+            # debe pedir credenciales de nuevo.
+            db.session.rollback()
+            return jsonify({"error": "invalid_refresh_token"}), 401
+
+        access, expira_en = generar_access_token(usuario)
+        db.session.commit()
+        rank_state = _augment_rank_state(calcular_estado_rango_perfil(usuario.puntos_totales or 0))
+        return jsonify({
+            "access_token": access,
+            "refresh_token": nuevo_refresh,
+            "expires_in": expira_en,
+            "token_type": "Bearer",
+            "token": access,
+            "user": serialize_user(usuario),
+            "rank_state": rank_state,
+        })
+
+    @api_bp.route("/auth/logout", methods=["POST"])
+    def api_logout():
+        """Cierra ESTA sesión en el servidor, no solo en el dispositivo.
+
+        Sin @jwt_required: cerrar sesión debe funcionar aunque el access ya
+        haya caducado, que es el caso más frecuente.
+        """
+        data = request.get_json(silent=True) or {}
+        revocada = revocar_refresh_token((data.get("refresh_token") or "").strip(), "logout")
+        db.session.commit()
+        # Respuesta idéntica revocara o no: un token inválido no debe permitir
+        # averiguar si existía.
+        return jsonify({"ok": True, "sesion_cerrada": bool(revocada)})
+
+    @api_bp.route("/auth/logout-all", methods=["POST"])
+    @jwt_required
+    def api_logout_all():
+        """Cierra la sesión en todos los dispositivos e invalida los access
+        tokens ya emitidos subiendo token_version."""
+        usuario = g.api_usuario
+        cerradas = revocar_todas_las_sesiones(usuario)
+        db.session.commit()
+        return jsonify({"ok": True, "sesiones_cerradas": int(cerradas)})
+
+    @api_bp.route("/auth/sesiones", methods=["GET"])
+    @jwt_required
+    def api_listar_sesiones():
+        """Dispositivos con sesión abierta. No expone ningún token."""
+        ahora = datetime.now(timezone.utc)
+        sesiones = (
+            Sesion.query
+            .filter(Sesion.usuario_id == g.api_usuario.id, Sesion.revocada_en.is_(None))
+            .order_by(Sesion.creado_en.desc())
+            .limit(50)
+            .all()
+        )
+        return jsonify({"sesiones": [
+            {
+                "id": s.id,
+                "dispositivo": s.dispositivo,
+                "creada": s.creado_en.isoformat() if s.creado_en else None,
+                "ultimo_uso": s.ultimo_uso.isoformat() if s.ultimo_uso else None,
+                "expira": s.expira_en.isoformat() if s.expira_en else None,
+            }
+            for s in sesiones if s.esta_viva(ahora)
+        ]})
 
     # ----------------- Dashboard -----------------
 

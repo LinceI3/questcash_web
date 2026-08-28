@@ -109,6 +109,20 @@ class Usuario(MarcasDeTiempo, db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     fecha_registro = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # Versión de los tokens de acceso emitidos para esta cuenta.
+    #
+    # Un access token lleva dentro el valor que tenía al emitirse. Incrementar
+    # esta columna invalida de golpe TODOS los tokens vivos del usuario, sin
+    # tener que buscarlos ni guardarlos: al validar se compara y no coinciden.
+    # Es lo que hace posible "cerrar sesión en todos los dispositivos" y lo que
+    # debe hacer un cambio de contraseña.
+    # server_default además de default: sin él, añadir esta columna NOT NULL
+    # sobre una tabla con filas falla — Postgres no sabe qué poner en las
+    # que ya existen, y el `default` de Python solo aplica a las nuevas.
+    token_version = db.Column(
+        db.Integer, nullable=False, default=1, server_default=db.text("1")
+    )
+
     # --- Búsqueda por correo ------------------------------------------------
     @staticmethod
     def por_correo(correo):
@@ -149,6 +163,60 @@ class Usuario(MarcasDeTiempo, db.Model):
     notif_ia = db.Column(db.Boolean, nullable=False, default=True)
     notif_fechas = db.Column(db.Boolean, nullable=False, default=True)
     notif_progreso = db.Column(db.Boolean, nullable=False, default=True)
+
+
+class Sesion(MarcasDeTiempo, db.Model):
+    """Un refresh token vivo, es decir, un dispositivo con sesión iniciada.
+
+    Antes la API emitía un único JWT de 30 días sin `jti`, sin lista de
+    revocación y sin forma de renovarlo. Cerrar sesión solo borraba el token
+    del dispositivo: seguía siendo válido un mes para quien lo tuviera, y
+    cambiar la contraseña tampoco lo invalidaba. Un token capturado daba un mes
+    de acceso completo a los datos financieros del usuario.
+
+    El modelo ahora es el estándar de dos tokens:
+
+      - ACCESS token, corto (60 min por omisión). No se guarda en ninguna
+        parte: se valida por firma, caducidad y `token_version`.
+      - REFRESH token, largo (30 días), que SÍ vive aquí y se puede revocar.
+        Rota en cada uso: al canjearlo se marca el anterior como usado y se
+        emite uno nuevo. Si alguien roba un refresh y lo canjea, el legítimo
+        deja de funcionar en su siguiente intento — el robo se nota.
+
+    Del token solo se guarda su hash. Igual que con las contraseñas: quien lea
+    esta tabla no puede suplantar a nadie con lo que encuentre dentro.
+    """
+
+    __tablename__ = "sesiones"
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+
+    # SHA-256 del refresh token. Determinista para poder buscarlo, e inútil
+    # para quien lo lea.
+    token_hash = db.Column(db.String(64), unique=True, index=True, nullable=False)
+
+    # Etiqueta legible del dispositivo, para que el usuario reconozca sus
+    # sesiones en una futura pantalla de "dispositivos conectados".
+    dispositivo = db.Column(db.String(120), nullable=True)
+
+    expira_en = db.Column(db.DateTime(timezone=True), nullable=False)
+    ultimo_uso = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    # Motivo de revocación: logout | rotacion | cierre_total | expirada.
+    # Se conserva la fila revocada en vez de borrarla: si un refresh ya rotado
+    # vuelve a aparecer, es señal de robo y hay con qué detectarlo.
+    revocada_en = db.Column(db.DateTime(timezone=True), nullable=True)
+    motivo_revocacion = db.Column(db.String(30), nullable=True)
+
+    usuario = db.relationship("Usuario")
+
+    __table_args__ = (
+        db.Index("ix_sesiones_usuario", "usuario_id"),
+    )
+
+    def esta_viva(self, ahora):
+        return self.revocada_en is None and self.expira_en > ahora
 
 
 class Quest(MarcasDeTiempo, db.Model):

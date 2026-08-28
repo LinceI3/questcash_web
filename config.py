@@ -70,7 +70,11 @@ class Config:
     # --- Secretos -----------------------------------------------------------
     SECRET_KEY = _exigido("SECRET_KEY", None if ES_DESPLIEGUE_REAL else "dev_key")
     JWT_SECRET_KEY = _exigido("JWT_SECRET_KEY", None if ES_DESPLIEGUE_REAL else SECRET_KEY)
-    JWT_EXP_DAYS = int(os.environ.get("JWT_EXP_DAYS", 30))
+    # Access corto y refresh largo. El access no se puede revocar —se valida
+    # solo por firma— así que su vida útil es la ventana de exposición de un
+    # token robado: 60 minutos en vez de los 30 días de antes.
+    JWT_ACCESS_MINUTOS = int(os.environ.get("JWT_ACCESS_MINUTOS", 60))
+    JWT_REFRESH_DIAS = int(os.environ.get("JWT_REFRESH_DIAS", 30))
 
     # --- Base de datos ------------------------------------------------------
     # En desarrollo se tolera el SQLite local; en un despliegue real, no: correr
