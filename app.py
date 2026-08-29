@@ -2234,6 +2234,16 @@ def create_app():
 
         return render_template("auth/eliminar_cuenta.html")
 
+    @app.route("/privacidad")
+    def aviso_privacidad():
+        """BORRADOR del aviso de privacidad. Ver la plantilla."""
+        return render_template("legal/privacidad.html")
+
+    @app.route("/terminos")
+    def terminos():
+        """BORRADOR de los términos y condiciones. Ver la plantilla."""
+        return render_template("legal/terminos.html")
+
     @app.route("/logout")
     @login_requerido
     def logout():

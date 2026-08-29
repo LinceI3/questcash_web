@@ -309,5 +309,12 @@
     <script src="{{ url_for('static', filename='js/animations.js') }}"></script>
     {% block scripts_extra %}{% endblock %}
 
+    <footer class="container py-4 mt-5 border-top">
+      <p class="text-muted small mb-0">
+        <a href="{{ url_for('aviso_privacidad') }}" class="text-muted">Aviso de privacidad</a>
+        &middot;
+        <a href="{{ url_for('terminos') }}" class="text-muted">Términos y condiciones</a>
+      </p>
+    </footer>
   </body>
 </html>
