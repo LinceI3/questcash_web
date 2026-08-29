@@ -7,6 +7,8 @@ referencias a los helpers ya definidos como closures dentro de `create_app()`
 módulo solo traduce esas mismas funciones a peticiones/respuestas JSON con
 auth por Bearer token (JWT) en vez de sesión por cookie.
 """
+import json
+import os
 import re
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
@@ -17,6 +19,9 @@ from werkzeug.security import check_password_hash, generate_password_hash  # noq
 from password_hashing import hashear_password, necesita_rehash, verificar_password
 
 import rate_limit
+import correo as correo_mod
+import rate_limit
+import tokens_correo
 from auth_jwt import (
     canjear_refresh_token,
     emitir_refresh_token,
@@ -30,6 +35,7 @@ from crypto_utils import indice_ciego
 from models import (
     CategoriaGasto,
     ClaveIdempotencia,
+    ClaveIdempotencia,
     InvitacionQuest,
     Sesion,
     Gasto,
@@ -42,7 +48,13 @@ from models import (
     UsuarioInsignia,
     db,
 )
-from validators import validar_gasto, validar_movimiento, validar_quest_form, validar_registro
+from validators import (
+    validar_gasto,
+    validar_movimiento,
+    validar_password_nueva,
+    validar_quest_form,
+    validar_registro,
+)
 
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
@@ -372,6 +384,7 @@ def register_api(app, csrf, ctx):
     generar_resumen_questy_usuario = ctx["generar_resumen_questy_usuario"]
     humanizar_segmento_questy = ctx["humanizar_segmento_questy"]
     obtener_o_crear_categoria_gasto = ctx["obtener_o_crear_categoria_gasto"]
+    eliminar_cuenta = ctx["eliminar_cuenta"]
     procesar_registro_movimiento = ctx["procesar_registro_movimiento"]
     MAX_LOGIN_INTENTOS = ctx["MAX_LOGIN_INTENTOS"]
     BLOQUEO_MINUTOS = ctx["BLOQUEO_MINUTOS"]
@@ -529,6 +542,126 @@ def register_api(app, csrf, ctx):
             }
             for s in sesiones if s.esta_viva(ahora)
         ]})
+
+    # ----------------- Contraseña y cuenta -----------------
+
+    def _url_app():
+        return os.environ.get("APP_URL", request.url_root).rstrip("/")
+
+    @api_bp.route("/auth/recuperar", methods=["POST"])
+    def api_recuperar():
+        """Pide un enlace de recuperación. Responde igual exista o no la cuenta."""
+        data = request.get_json(silent=True) or {}
+        correo_usuario = (data.get("correo") or "").strip().lower()
+        ip = request.remote_addr or "unknown"
+
+        if not rate_limit.segundos_de_bloqueo(f"recuperar:{correo_usuario}", ip):
+            usuario = Usuario.por_correo(correo_usuario)
+            if usuario is not None:
+                crudo = tokens_correo.emitir(usuario, ip=ip)
+                db.session.commit()
+                correo_mod.enviar_recuperacion(
+                    correo_usuario, f"{_url_app()}/recuperar/{crudo}",
+                    tokens_correo.MINUTOS_VALIDEZ,
+                )
+            elif re.match(EMAIL_REGEX, correo_usuario or ""):
+                correo_mod.enviar_aviso_sin_cuenta(correo_usuario)
+            rate_limit.registrar_fallo(f"recuperar:{correo_usuario}", ip)
+
+        return jsonify({"ok": True})
+
+    @api_bp.route("/auth/password", methods=["PUT"])
+    @jwt_required
+    def api_cambiar_password():
+        """Cambio de contraseña con sesión iniciada. Exige la actual."""
+        usuario = g.api_usuario
+        data = request.get_json(silent=True) or {}
+        actual = data.get("password_actual") or ""
+        nueva = data.get("password") or ""
+        nueva2 = data.get("password2") or ""
+
+        errores = []
+        if not verificar_password(usuario.password_hash, actual):
+            errores.append("La contraseña actual no es correcta.")
+        errores += validar_password_nueva(nueva, nueva2, usuario.nombre)
+        if errores:
+            return jsonify({"errors": errores}), 400
+
+        usuario.password_hash = hashear_password(nueva)
+        revocar_todas_las_sesiones(usuario, "cambio_password")
+        db.session.commit()
+        correo_mod.enviar_password_cambiada(usuario.correo)
+
+        # Se emite una sesión nueva: el cierre total acaba de invalidar la que
+        # el cliente traía, y expulsarlo por cambiar su propia contraseña sería
+        # absurdo.
+        return _respuesta_de_sesion(usuario)
+
+    @api_bp.route("/auth/mis-datos", methods=["GET"])
+    @jwt_required
+    def api_exportar_datos():
+        """Todo lo que QuestCash guarda de esta persona, en un solo JSON.
+
+        Es el derecho de acceso y el de portabilidad a la vez: un formato
+        estructurado y legible que el usuario puede llevarse. Se sirve como
+        descarga con nombre de archivo para que sea utilizable, no solo
+        consultable.
+        """
+        usuario = g.api_usuario
+        quests = obtener_quests_usuario(usuario)
+        movimientos = Movimiento.query.filter_by(usuario_id=usuario.id).all()
+        gastos = Gasto.query.filter_by(usuario_id=usuario.id).all()
+        insignias = UsuarioInsignia.query.filter_by(usuario_id=usuario.id).all()
+        notificaciones = Notificacion.query.filter_by(usuario_id=usuario.id).all()
+        sesiones = Sesion.query.filter_by(usuario_id=usuario.id).all()
+
+        datos = {
+            "exportado": datetime.now(timezone.utc).isoformat(),
+            "cuenta": serialize_user(usuario),
+            "metas": [serialize_quest(q) for q in quests],
+            "movimientos": [serialize_movimiento(m) for m in movimientos],
+            "gastos": [serialize_gasto(x) for x in gastos],
+            "insignias": [
+                {"codigo": ui.insignia.codigo, "nombre": ui.insignia.nombre,
+                 "obtenida": ui.fecha_obtenida.isoformat() if ui.fecha_obtenida else None}
+                for ui in insignias
+            ],
+            "notificaciones": [serialize_notificacion(n) for n in notificaciones],
+            "sesiones": [
+                {"dispositivo": x.dispositivo,
+                 "creada": x.creado_en.isoformat() if x.creado_en else None,
+                 "revocada": x.revocada_en.isoformat() if x.revocada_en else None}
+                for x in sesiones
+            ],
+        }
+        respuesta = current_app.response_class(
+            json.dumps(datos, ensure_ascii=False, indent=2, default=str),
+            mimetype="application/json",
+        )
+        respuesta.headers["Content-Disposition"] = 'attachment; filename="questcash-mis-datos.json"'
+        return respuesta
+
+    @api_bp.route("/auth/cuenta", methods=["DELETE"])
+    @jwt_required
+    def api_eliminar_cuenta():
+        """Elimina la cuenta y todo lo que cuelga de ella.
+
+        Exige la contraseña: el token no basta para una operación
+        irreversible, y un dispositivo desatendido no debe poder borrar la
+        cuenta de nadie.
+
+        El borrado es real, no una marca de baja. Es el derecho de cancelación,
+        y la App Store lo exige desde dentro de la aplicación para toda app que
+        permita crear cuenta.
+        """
+        usuario = g.api_usuario
+        data = request.get_json(silent=True) or {}
+        if not verificar_password(usuario.password_hash, data.get("password") or ""):
+            return jsonify({"errors": ["La contraseña no es correcta."]}), 400
+
+        eliminar_cuenta(usuario)
+        db.session.commit()
+        return "", 204
 
     # ----------------- Dashboard -----------------
 

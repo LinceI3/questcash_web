@@ -1,8 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="d-flex justify-content-end mb-3">
-  <a href="{{ url_for('cambiar_password') }}" class="btn btn-outline-secondary btn-sm">
+  <a href="{{ url_for('exportar_mis_datos') }}" class="btn btn-outline-secondary btn-sm me-2">
+    Descargar mis datos
+  </a>
+  <a href="{{ url_for('cambiar_password') }}" class="btn btn-outline-secondary btn-sm me-2">
     Cambiar contraseña
+  </a>
+  <a href="{{ url_for('eliminar_mi_cuenta') }}" class="btn btn-outline-danger btn-sm">
+    Eliminar cuenta
   </a>
 </div>
 

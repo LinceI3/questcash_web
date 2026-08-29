@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-center">
+  <div class="qc-card p-4" style="max-width: 520px; width:100%;">
+
+    <h1 class="h4 fw-bold mb-2">Eliminar mi cuenta</h1>
+
+    <div class="alert alert-danger">
+      <p class="mb-2"><strong>Esto no se puede deshacer.</strong></p>
+      <p class="mb-0 small">
+        Se borran tu perfil, tus metas, tus movimientos, tus gastos y tus
+        insignias. Las metas compartidas que creaste se eliminan también para
+        quienes colaboran en ellas.
+      </p>
+    </div>
+
+    <p class="text-muted small">
+      Antes de irte puedes
+      <a href="{{ url_for('exportar_mis_datos') }}">descargar todos tus datos</a>.
+    </p>
+
+    <form method="POST" novalidate>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="mb-3">
+        <label for="password" class="form-label">Tu contraseña</label>
+        <input type="password" name="password" id="password" required
+               class="form-control form-control-lg" autocomplete="current-password">
+      </div>
+
+      <div class="mb-3">
+        <label for="confirmacion" class="form-label">
+          Escribe <code>ELIMINAR</code> para confirmar
+        </label>
+        <input type="text" name="confirmacion" id="confirmacion" required
+               class="form-control form-control-lg" placeholder="ELIMINAR"
+               autocomplete="off">
+      </div>
+
+      <button type="submit" class="btn btn-danger btn-lg w-100">
+        Eliminar mi cuenta definitivamente
+      </button>
+      <a href="{{ url_for('perfil') }}" class="btn btn-link w-100 mt-2">Cancelar</a>
+    </form>
+  </div>
+</div>
+{% endblock %}

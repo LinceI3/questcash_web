@@ -330,8 +330,15 @@ class Movimiento(MarcasDeTiempo, db.Model):
     # Categoría del movimiento (comida, transporte, viaje, etc.)
     categoria = db.Column(db.String(50), nullable=True, default="general")
 
-    # Relaciones
-    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+    # Relaciones.
+    #
+    # usuario_id es NULLABLE a propósito. Cuando alguien elimina su cuenta, sus
+    # aportes a metas COLABORATIVAS de otras personas no se borran: se
+    # desligan. Borrarlos dejaría la meta con un saldo que no cuadra con su
+    # historial y reduciría el progreso de gente que no ha pedido nada. Poner
+    # el vínculo a NULL cumple el derecho de cancelación —el movimiento deja de
+    # ser atribuible a una persona— sin descuadrar a terceros.
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=True)
     quest_id = db.Column(db.Integer, db.ForeignKey("quests.id"), nullable=False)
 
     usuario = db.relationship("Usuario")

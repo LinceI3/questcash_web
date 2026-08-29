@@ -1,4 +1,5 @@
 # app.py
+import json
 import math
 import os
 from decimal import Decimal
@@ -26,8 +27,11 @@ from config import Config
 from crypto_utils import indice_ciego
 from models import (
     db,
+    ClaveIdempotencia,
     InvitacionQuest,
     Quest,
+    Sesion,
+    TokenCorreo,
     Usuario,
     Movimiento,
     ParticipacionQuest,
@@ -1964,6 +1968,62 @@ def create_app():
 
         return render_template("auth/login.html")
 
+    def eliminar_cuenta(usuario):
+        """Borra la cuenta y todo lo que cuelga de ella, en orden.
+
+        El borrado es real, no una marca de baja: es el derecho de cancelación,
+        y una cuenta "dada de baja" que conserva los datos no lo satisface.
+
+        El orden importa porque las cascadas del modelo colgaban de Quest, no
+        de Usuario: borrar el usuario sin más habría dejado movimientos, gastos
+        y notificaciones apuntando a un id inexistente.
+
+        Las metas COLABORATIVAS de las que esta persona no es creadora NO se
+        borran, y sus aportes tampoco: son movimientos de una meta que sigue
+        viva y de la que otras personas dependen. Borrarlos descuadraría el
+        saldo de terceros que no han pedido nada. Lo que se elimina es su
+        participación y su vínculo con esos movimientos, reasignándolos a la
+        meta en vez de a la persona.
+        """
+        # 1. Sesiones, tokens y claves de idempotencia: sin valor tras el borrado.
+        Sesion.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+        TokenCorreo.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+        ClaveIdempotencia.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+
+        # 2. Invitaciones que envió y las que le enviaron a él.
+        InvitacionQuest.query.filter_by(invitado_por_id=usuario.id).delete(synchronize_session=False)
+        if usuario.correo_bi:
+            InvitacionQuest.query.filter_by(correo_bi=usuario.correo_bi).delete(synchronize_session=False)
+
+        # 3. Notificaciones, insignias y gastos: solo suyos, se van con él.
+        Notificacion.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+        UsuarioInsignia.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+        Gasto.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+
+        # 4. Metas propias: al borrarlas caen en cascada sus movimientos y
+        #    participaciones, incluidos los aportes de otros colaboradores.
+        propias = Quest.query.filter_by(usuario_id=usuario.id).all()
+        ids_propias = {q.id for q in propias}
+        for quest in propias:
+            db.session.delete(quest)
+
+        # 5. Movimientos en metas AJENAS: se DESLIGAN, no se borran.
+        #
+        #    Borrarlos dejaría la meta compartida con un monto_actual que ya no
+        #    cuadra con su historial de movimientos, y reduciría el progreso de
+        #    personas que no han pedido nada. Poner usuario_id a NULL cumple el
+        #    derecho de cancelación —el aporte deja de ser atribuible a nadie—
+        #    sin descuadrar a terceros.
+        consulta = Movimiento.query.filter(Movimiento.usuario_id == usuario.id)
+        if ids_propias:
+            consulta = consulta.filter(~Movimiento.quest_id.in_(ids_propias))
+        consulta.update({"usuario_id": None}, synchronize_session=False)
+
+        # 6. Participaciones en metas ajenas.
+        ParticipacionQuest.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+
+        db.session.delete(usuario)
+
     def _url_app():
         """Base pública para los enlaces que van por correo.
 
@@ -2084,6 +2144,89 @@ def create_app():
             return redirect(url_for("perfil"))
 
         return render_template("auth/cambiar_password.html")
+
+    @app.route("/perfil/mis-datos")
+    @login_requerido
+    def exportar_mis_datos():
+        """Descarga todo lo que QuestCash guarda de esta persona.
+
+        Cubre el derecho de acceso y el de portabilidad: formato estructurado,
+        legible y que el usuario puede llevarse.
+        """
+        usuario = g.usuario_actual
+        datos = {
+            "exportado": datetime.utcnow().isoformat(),
+            "cuenta": {
+                "nombre": usuario.nombre,
+                "correo": usuario.correo,
+                "alias": usuario.alias,
+                "puntos_totales": usuario.puntos_totales,
+                "fecha_registro": usuario.fecha_registro.isoformat() if usuario.fecha_registro else None,
+            },
+            "metas": [
+                {"nombre": q.nombre, "descripcion": q.descripcion,
+                 "monto_objetivo": str(q.monto_objetivo), "monto_actual": str(q.monto_actual),
+                 "fecha_limite": q.fecha_limite.isoformat() if q.fecha_limite else None,
+                 "estatus": q.estatus, "tipo": q.tipo}
+                for q in obtener_quests_usuario(usuario)
+            ],
+            "movimientos": [
+                {"tipo": m.tipo, "monto": str(m.monto), "nota": m.nota,
+                 "categoria": m.categoria,
+                 "fecha": m.fecha.isoformat() if m.fecha else None}
+                for m in Movimiento.query.filter_by(usuario_id=usuario.id).all()
+            ],
+            "gastos": [
+                {"monto": str(x.monto), "descripcion": x.descripcion,
+                 "fecha": x.fecha.isoformat() if x.fecha else None,
+                 "metodo_pago": x.metodo_pago,
+                 "categoria": x.categoria.nombre if x.categoria else None}
+                for x in Gasto.query.filter_by(usuario_id=usuario.id).all()
+            ],
+            "insignias": [
+                {"codigo": ui.insignia.codigo, "nombre": ui.insignia.nombre,
+                 "obtenida": ui.fecha_obtenida.isoformat() if ui.fecha_obtenida else None}
+                for ui in UsuarioInsignia.query.filter_by(usuario_id=usuario.id).all()
+            ],
+        }
+        respuesta = app.response_class(
+            json.dumps(datos, ensure_ascii=False, indent=2, default=str),
+            mimetype="application/json",
+        )
+        respuesta.headers["Content-Disposition"] = 'attachment; filename="questcash-mis-datos.json"'
+        return respuesta
+
+    @app.route("/perfil/eliminar", methods=["GET", "POST"])
+    @login_requerido
+    def eliminar_mi_cuenta():
+        """Borra la cuenta. Exige la contraseña y escribir ELIMINAR.
+
+        La contraseña porque el token o la cookie no bastan para algo
+        irreversible; la palabra porque un clic accidental no debe destruir el
+        historial financiero de nadie.
+        """
+        if request.method == "POST":
+            password = request.form.get("password", "")
+            confirmacion = request.form.get("confirmacion", "").strip().upper()
+
+            errores = []
+            if not verificar_password(g.usuario_actual.password_hash, password):
+                errores.append("La contraseña no es correcta.")
+            if confirmacion != "ELIMINAR":
+                errores.append('Escribe ELIMINAR para confirmar.')
+
+            if errores:
+                for e in errores:
+                    flash(e, "danger")
+                return render_template("auth/eliminar_cuenta.html")
+
+            eliminar_cuenta(g.usuario_actual)
+            db.session.commit()
+            session.clear()
+            flash("Tu cuenta y todos tus datos se eliminaron.", "info")
+            return redirect(url_for("login"))
+
+        return render_template("auth/eliminar_cuenta.html")
 
     @app.route("/logout")
     @login_requerido
@@ -3040,6 +3183,7 @@ def create_app():
         "generar_resumen_questy_usuario": generar_resumen_questy_usuario,
         "humanizar_segmento_questy": humanizar_segmento_questy,
         "obtener_o_crear_categoria_gasto": obtener_o_crear_categoria_gasto,
+        "eliminar_cuenta": eliminar_cuenta,
         "procesar_registro_movimiento": procesar_registro_movimiento,
         "MAX_LOGIN_INTENTOS": MAX_LOGIN_INTENTOS,
         "BLOQUEO_MINUTOS": BLOQUEO_MINUTOS,
