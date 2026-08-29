@@ -171,3 +171,42 @@ def auth():
     def _auth(token):
         return {"Authorization": f"Bearer {token}"}
     return _auth
+
+
+@pytest.fixture
+def capturar_logs():
+    """Captura los registros de un logger concreto.
+
+    No se usa `caplog` porque el plugin de logging de pytest gestiona el nivel
+    del logger raíz por su cuenta y, según la configuración, deja `records`
+    vacío. Una prueba que comprueba que ALGO NO aparece en el log pasaría
+    entonces siempre, sin probar nada: fue exactamente lo que ocurrió al
+    escribir estas pruebas.
+    """
+    import logging
+
+    class Recolector(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.registros = []
+
+        def emit(self, registro):
+            self.registros.append(registro)
+
+    creados = []
+
+    def _capturar(nombre="questcash.peticiones", nivel=logging.INFO):
+        logger = logging.getLogger(nombre)
+        h = Recolector()
+        h.setLevel(nivel)
+        logger.addHandler(h)
+        nivel_previo = logger.level
+        logger.setLevel(nivel)
+        creados.append((logger, h, nivel_previo))
+        return h
+
+    yield _capturar
+
+    for logger, h, nivel_previo in creados:
+        logger.removeHandler(h)
+        logger.setLevel(nivel_previo)

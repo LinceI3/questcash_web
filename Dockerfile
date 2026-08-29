@@ -3,16 +3,14 @@
 # versión más nueva con la que TODAS las dependencias fijadas en
 # requirements.txt instalan desde wheel, sin compilar: psycopg2-binary 2.9.9
 # no publica wheels para 3.13 ni 3.14.
-#
-# La variante `slim` trae lo mismo sin la cadena de compilación ni las
-# herramientas de documentación: la imagen baja de ~1 GB a ~150 MB de base.
 FROM python:3.12-slim
 
 WORKDIR /app
 
 # netcat-openbsd lo usa wait-for-db.sh para esperar a Postgres.
+# curl lo usa el HEALTHCHECK de abajo.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends netcat-openbsd \
+    && apt-get install -y --no-install-recommends netcat-openbsd curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -20,11 +18,29 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# No escribir .pyc y no bufferizar la salida: los logs salen en el momento,
-# que es lo que espera un recolector de logs cuando corre en un contenedor.
+# Usuario sin privilegios.
+#
+# Correr como root dentro del contenedor significa que una ejecución de código
+# arbitraria empieza siendo root: puede escribir en cualquier ruta de la
+# imagen, instalar herramientas y —si el contenedor tiene capacidades de más—
+# intentar salir hacia el anfitrión. No cuesta nada evitarlo.
+#
+# Solo se le da propiedad de lo que necesita escribir: las fotos de perfil.
+# El resto del código queda de solo lectura para el proceso.
+RUN useradd --system --create-home --shell /usr/sbin/nologin questcash \
+    && mkdir -p /app/static/uploads/profiles \
+    && chown -R questcash:questcash /app/static/uploads
+USER questcash
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 EXPOSE 5000
+
+# Comprueba que el proceso responde, no que la base esté viva: para eso está
+# /ready. Confundirlas hace que el orquestador reinicie la aplicación en bucle
+# cuando lo que se cayó fue Postgres.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD curl -fsS http://localhost:5000/health || exit 1
 
 CMD ["sh", "wait-for-db.sh"]

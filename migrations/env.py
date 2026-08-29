@@ -11,7 +11,17 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-fileConfig(config.config_file_name)
+# disable_existing_loggers=False es imprescindible.
+#
+# Por omisión, fileConfig DESACTIVA todos los loggers que ya existan. Como las
+# migraciones corren al arrancar el contenedor (wait-for-db.sh llama a
+# scripts/preparar_bd.py antes de levantar gunicorn), eso dejaba mudos los
+# loggers de la aplicación —incluido el de peticiones— durante toda la vida del
+# proceso: la aplicación funcionaba y no registraba absolutamente nada.
+#
+# Se descubrió al escribir las pruebas de observabilidad: un logger con su
+# manejador puesto y el nivel correcto no emitía ni una línea.
+fileConfig(config.config_file_name, disable_existing_loggers=False)
 logger = logging.getLogger('alembic.env')
 
 

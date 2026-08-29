@@ -140,6 +140,33 @@ jobs:
           fi
           echo "sin orígenes externos"
 
+      - name: Sondas de salud
+        run: |
+          # /health no debe tocar la base y /ready sí: confundirlas hace que un
+          # orquestador reinicie la aplicación en bucle cuando lo que se cayó
+          # fue Postgres.
+          curl -fsS http://localhost:5002/health  | grep -q '"estado":"vivo"'
+          curl -fsS http://localhost:5002/ready   | grep -q '"base_de_datos":"ok"'
+          echo "las dos sondas responden"
+
+      - name: El contenedor no corre como root
+        run: |
+          USUARIO=$(docker exec qc_web id -un)
+          [ "$USUARIO" != "root" ] || { echo "el contenedor corre como root"; exit 1; }
+          echo "corre como $USUARIO"
+
+      - name: Los logs son JSON y no llevan datos personales
+        run: |
+          # Un log estructurado se puede filtrar por campo; uno de texto libre,
+          # no. Y volcar datos personales al log los saca por la puerta de
+          # atrás de un sistema que los cifra en reposo.
+          docker logs qc_web 2>&1 | grep -q '"peticion_id"' \
+            || { echo "no hay logs estructurados"; docker logs qc_web | tail -20; exit 1; }
+          if docker logs qc_web 2>&1 | grep -qiE '"(correo|password|nota|descripcion)"\s*:'; then
+            echo "los logs contienen campos con datos personales"; exit 1
+          fi
+          echo "logs estructurados y sin datos personales"
+
       - name: Concurrencia con varios workers
         run: python tests/humo/concurrencia.py --url http://localhost:5002
 

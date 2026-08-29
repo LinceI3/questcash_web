@@ -6,6 +6,7 @@ from decimal import Decimal
 from flask.json.provider import DefaultJSONProvider
 from flask import (
     Flask,
+    jsonify,
     render_template,
     redirect,
     url_for,
@@ -53,6 +54,7 @@ from validators import (
     validar_movimiento,
     validar_gasto,
 )
+import observabilidad
 from api import register_api
 from services import gastos as gastos_svc
 from services import insignias as insignias_svc
@@ -146,6 +148,9 @@ def create_app():
     saltos = int(os.environ.get("PROXY_FIX_HOPS", "0"))
     if saltos > 0:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=saltos, x_proto=saltos, x_host=saltos)
+
+    # Antes que nada: si algo falla al montar el resto, que quede registrado.
+    observabilidad.init_app(app)
 
     db.init_app(app)
     migrate.init_app(app, db)
@@ -1923,6 +1928,48 @@ def create_app():
             return redirect(url_for("login"))
 
         return render_template("auth/eliminar_cuenta.html")
+
+    # ----------------- Salud -----------------
+    #
+    # Dos sondas distintas a propósito, porque responden preguntas distintas:
+    #
+    #   /health  ¿el proceso está vivo? No toca la base. Si esto falla, hay que
+    #            reiniciar el contenedor.
+    #   /ready   ¿puede atender tráfico? Comprueba la base. Si esto falla pero
+    #            /health responde, el problema está fuera de la aplicación y
+    #            reiniciarla no arregla nada.
+    #
+    # Confundirlas hace que un orquestador reinicie la aplicación en bucle
+    # cuando lo que se cayó fue Postgres.
+
+    @app.route("/health")
+    def health():
+        return jsonify({"estado": "vivo"})
+
+    @app.route("/ready")
+    def ready():
+        detalles = {}
+        listo = True
+
+        try:
+            db.session.execute(db.text("SELECT 1"))
+            detalles["base_de_datos"] = "ok"
+        except Exception as exc:
+            detalles["base_de_datos"] = f"error: {type(exc).__name__}"
+            listo = False
+
+        try:
+            import rate_limit
+            almacen = rate_limit.almacen()
+            detalles["estado_compartido"] = (
+                "redis" if almacen.__class__.__name__ == "_AlmacenRedis" else "memoria"
+            )
+        except Exception as exc:
+            detalles["estado_compartido"] = f"error: {type(exc).__name__}"
+            # Sin Redis la aplicación sirve, pero el control de intentos deja
+            # de compartirse: es degradación, no caída.
+
+        return jsonify({"estado": "listo" if listo else "no listo", **detalles}), (200 if listo else 503)
 
     @app.route("/privacidad")
     def aviso_privacidad():
