@@ -203,7 +203,11 @@
 </div>
 
 <!-- Chart.js -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{# Autoalojado y FIJADO en 4.4.1. Antes se pedía «npm/chart.js» sin
+   versión: eso trae la última que haya publicada en cada visita, así que
+   un cambio incompatible —o un compromiso del paquete— llegaba a los
+   usuarios sin que nadie hiciera nada. #}
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
 <script>
   const serie30Labels = {{ serie_30.labels|tojson }};
   const serie30Data = {{ serie_30.data|tojson }};

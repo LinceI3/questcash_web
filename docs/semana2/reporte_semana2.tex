@@ -1,0 +1,676 @@
+% =====================================================================
+%  QuestCash — Entregable ED, Semana 2
+%  Autenticación por token (JWT) y protección de endpoints
+%  Compilar con:  pdflatex reporte_semana2.tex   (dos veces)
+% =====================================================================
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.4cm,top=2.8cm,bottom=2.6cm]{geometry}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{caption}
+\usepackage{tcolorbox}
+\usepackage{listings}
+\usepackage{amssymb}
+\usepackage[hidelinks]{hyperref}
+
+\tcbuselibrary{skins,breakable}
+
+% ---------- Español (sin babel: se renombran los rótulos a mano) ----------
+\renewcommand{\tablename}{Tabla}
+\renewcommand{\figurename}{Figura}
+\renewcommand{\refname}{Referencias}
+\renewcommand{\contentsname}{Contenido}
+
+% ---------- Paleta ----------
+\definecolor{qcNavy}{HTML}{0F2E4C}
+\definecolor{qcBlue}{HTML}{2563EB}
+\definecolor{qcGreen}{HTML}{16A34A}
+\definecolor{qcRed}{HTML}{DC2626}
+\definecolor{qcAmber}{HTML}{B45309}
+\definecolor{qcGray}{HTML}{6B7280}
+\definecolor{qcLight}{HTML}{F3F4F6}
+\definecolor{qcCodeBg}{HTML}{111827}
+
+% ---------- Encabezado / pie ----------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize\color{qcGray}QuestCash · Entregable ED — Semana 2}
+\fancyhead[R]{\footnotesize\color{qcGray}Autenticación JWT}
+\fancyfoot[C]{\footnotesize\color{qcGray}\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{qcLight}\leaders\hrule height \headrulewidth\hfill}}
+
+% ---------- Títulos ----------
+\titleformat{\section}{\Large\bfseries\color{qcNavy}}{\thesection.}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries\color{qcNavy}}{\thesubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{1.6em}{0.7em}
+
+\captionsetup{font=small,labelfont={bf,color=qcNavy}}
+
+% ---------- Estilo de código / terminal ----------
+\lstdefinestyle{terminal}{
+  basicstyle=\ttfamily\scriptsize\color{white},
+  backgroundcolor=\color{qcCodeBg},
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  frame=none,
+  xleftmargin=6pt,
+  xrightmargin=4pt,
+  literate={á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+           {ñ}{{\~n}}1 {Á}{{\'A}}1 {É}{{\'E}}1 {Í}{{\'I}}1 {Ó}{{\'O}}1
+           {Ú}{{\'U}}1 {Ñ}{{\~N}}1 {°}{{\textdegree}}1 {¿}{{?}}1 {»}{{>}}1
+}
+
+\lstdefinestyle{python}{
+  language=Python,
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{qcBlue}\bfseries,
+  commentstyle=\color{qcGreen}\itshape,
+  stringstyle=\color{qcAmber},
+  numbers=left,
+  numberstyle=\tiny\color{qcGray},
+  numbersep=8pt,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  frame=leftline,
+  framesep=6pt,
+  rulecolor=\color{qcLight},
+  xleftmargin=16pt,
+  literate={á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+           {ñ}{{\~n}}1 {Á}{{\'A}}1 {É}{{\'E}}1 {Í}{{\'I}}1 {Ó}{{\'O}}1 {Ú}{{\'U}}1
+}
+
+% ---------- Caja de consola ----------
+\newtcolorbox{consola}[1][]{
+  enhanced, breakable,
+  colback=qcCodeBg, colframe=qcNavy,
+  boxrule=0.6pt, arc=2pt,
+  left=2pt, right=2pt, top=4pt, bottom=4pt,
+  fonttitle=\ttfamily\scriptsize\bfseries, coltitle=white,
+  colbacktitle=qcNavy,
+  #1
+}
+
+% ---------- Caja de nota ----------
+\newtcolorbox{nota}[1][]{
+  enhanced, breakable,
+  colback=qcLight, colframe=qcGray,
+  boxrule=0.4pt, arc=2pt, left=8pt, right=8pt, top=6pt, bottom=6pt,
+  #1
+}
+
+% ---------- Marcadores de resultado ----------
+\newcommand{\ok}{\textcolor{qcGreen}{\textbf{\checkmark\ PASA}}}
+\newcommand{\http}[2]{\textcolor{#1}{\texttt{\textbf{#2}}}}
+
+\begin{document}
+
+% =====================  PORTADA  =====================
+\begin{titlepage}
+\centering
+\vspace*{2.2cm}
+
+{\color{qcBlue}\rule{\textwidth}{2.5pt}}
+
+\vspace{0.9cm}
+{\Huge\bfseries\color{qcNavy} QuestCash\par}
+\vspace{0.4cm}
+{\LARGE\color{qcNavy} Seguridad de la API: autenticación por token (JWT)\par}
+
+\vspace{0.5cm}
+{\color{qcBlue}\rule{\textwidth}{2.5pt}}
+
+\vspace{1.6cm}
+{\large\bfseries Entregable ED — Semana 2\par}
+\vspace{0.5cm}
+{\large\itshape Prueba de que un endpoint protegido rechaza peticiones sin token\\ y las acepta con un token válido\par}
+
+\vspace{2.5cm}
+
+\begin{tabular}{@{}>{\bfseries\color{qcNavy}}l l@{}}
+\toprule
+Proyecto        & QuestCash \\
+Componentes     & \texttt{questcash\_web} (API Flask) · \texttt{questcash\_mobile} (Expo / React Native) \\
+Módulo evaluado & \texttt{auth\_jwt.py} — middleware \texttt{@jwt\_required} \\
+API             & \texttt{/api/v1} \\
+Algoritmo       & JWT firmado con HS256 \\
+Autor           & Armando Yael Contreras Bejarano \\
+Fecha           & 17 de agosto de 2026 \\
+\bottomrule
+\end{tabular}
+
+\vfill
+{\small\color{qcGray} Documento generado a partir de la ejecución real de la batería de pruebas\\ descrita en la sección 3. Todas las respuestas HTTP mostradas son salidas literales de \texttt{curl}.}
+\end{titlepage}
+
+% =====================  1. RESUMEN  =====================
+\section{Resumen del entregable}
+
+El objetivo de la semana era proteger la API de QuestCash con autenticación basada en
+tokens. Al momento de esta entrega la implementación \textbf{ya estaba construida} en el
+backend (\texttt{questcash\_web}) y consumida por la app móvil (\texttt{questcash\_mobile}),
+por lo que el trabajo de esta semana consistió en \textbf{verificarla y documentar la
+evidencia} exigida por el entregable ED.
+
+\vspace{0.4em}
+\begin{center}
+\begin{tabular}{@{}p{7.2cm} c p{5.4cm}@{}}
+\toprule
+\textbf{Requisito de la semana} & \textbf{Estado} & \textbf{Dónde está} \\
+\midrule
+Login que devuelva un JWT & \ok & \texttt{POST /api/v1/auth/login} en \texttt{api.py} \\[2pt]
+Middleware que valide el token en cada petición & \ok & decorador \texttt{@jwt\_required} en \texttt{auth\_jwt.py} \\[2pt]
+Endpoints sensibles protegidos & \ok & 20 rutas de \texttt{/api/v1} decoradas \\[2pt]
+Manejo de token expirado & \ok & \texttt{401 token\_expired} \\[2pt]
+Manejo de token inválido & \ok & \texttt{401 invalid\_token} / \texttt{missing\_token} \\[2pt]
+\textbf{Prueba: rechaza sin token / acepta con token} & \ok & sección \ref{sec:evidencia}, pruebas P1 y P2 \\[2pt]
+Conexión asegurada con HTTPS & \textcolor{qcAmber}{\textbf{parcial}} & ver sección \ref{sec:https} \\
+\bottomrule
+\end{tabular}
+\captionof{table}{Cumplimiento de los objetivos de la semana 2.}
+\end{center}
+
+\vspace{0.6em}
+\begin{nota}
+\textbf{Resultado global:} las 10 pruebas ejecutadas pasaron. Un endpoint protegido
+devuelve \http{qcRed}{401 Unauthorized} sin token, con token manipulado, con token
+expirado y con token firmado por un tercero; y devuelve \http{qcGreen}{200 OK} con los
+datos del usuario únicamente cuando el token es válido y está vigente.
+\end{nota}
+
+% =====================  2. IMPLEMENTACIÓN  =====================
+\section{Cómo está implementado}
+
+\subsection{Emisión del token (login)}
+
+El endpoint público \texttt{POST /api/v1/auth/login} valida las credenciales contra el
+hash almacenado (\texttt{werkzeug.security.check\_password\_hash}) y, si son correctas,
+emite un JWT firmado con HS256:
+
+\begin{lstlisting}[style=python,caption={\texttt{auth\_jwt.py} — generación del token.}]
+def generate_token(usuario_id):
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(usuario_id),
+        "iat": now,
+        "exp": now + timedelta(days=current_app.config["JWT_EXP_DAYS"]),
+    }
+    return jwt.encode(payload, current_app.config["JWT_SECRET_KEY"], algorithm="HS256")
+\end{lstlisting}
+
+El login además comparte el mismo contador de intentos fallidos que el login web
+(\texttt{MAX\_LOGIN\_INTENTOS} / \texttt{BLOQUEO\_MINUTOS}), de modo que la API no abre un
+segundo vector de fuerza bruta contra la misma cuenta: tras N intentos responde
+\http{qcRed}{429} con \texttt{\{"error": "locked"\}}.
+
+\subsection{Middleware de validación}
+
+Toda ruta sensible se decora con \texttt{@jwt\_required}. El decorador extrae el token del
+encabezado \texttt{Authorization: Bearer <token>}, lo verifica y carga el usuario en
+\texttt{g.api\_usuario} antes de ceder el control a la vista. Cada caso de fallo tiene su
+propio código de error:
+
+\begin{lstlisting}[style=python,caption={\texttt{auth\_jwt.py} — middleware de autenticación.}]
+def jwt_required(vista):
+    """Exige un Bearer token valido y carga g.api_usuario."""
+    @wraps(vista)
+    def wrapped(*args, **kwargs):
+        token = _extraer_token()
+        if not token:
+            return jsonify({"error": "missing_token"}), 401
+
+        try:
+            payload = decode_token(token)
+        except jwt.ExpiredSignatureError:
+            return jsonify({"error": "token_expired"}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({"error": "invalid_token"}), 401
+
+        usuario = Usuario.query.get(int(payload["sub"]))
+        if usuario is None:
+            return jsonify({"error": "invalid_token"}), 401
+
+        g.api_usuario = usuario
+        return vista(*args, **kwargs)
+
+    return wrapped
+\end{lstlisting}
+
+\begin{nota}
+Nótese que la validación de firma y de expiración la hace \texttt{PyJWT} dentro de
+\texttt{jwt.decode()}, no código propio: es la biblioteca la que recalcula el HMAC-SHA256 y
+compara el claim \texttt{exp} contra la hora actual. El decorador solo traduce esas
+excepciones a respuestas JSON. Además se verifica que el usuario del claim \texttt{sub}
+siga existiendo en la base de datos, de modo que un token de una cuenta eliminada tampoco
+sirve.
+\end{nota}
+
+\subsection{Superficie protegida}
+
+De los 23 endpoints de \texttt{/api/v1}, \textbf{20 exigen token}. Los únicos tres públicos
+son los que por definición no pueden exigirlo:
+
+\begin{center}
+\begin{tabular}{@{}l l l@{}}
+\toprule
+\textbf{Endpoint} & \textbf{Método} & \textbf{Protección} \\
+\midrule
+\texttt{/auth/register} & POST & pública (crea la cuenta y emite token) \\
+\texttt{/auth/login}    & POST & pública (valida credenciales, emite token) \\
+\midrule
+\texttt{/auth/me}                            & GET            & \texttt{@jwt\_required} \\
+\texttt{/dashboard}                          & GET            & \texttt{@jwt\_required} \\
+\texttt{/quests}                             & GET, POST      & \texttt{@jwt\_required} \\
+\texttt{/quests/<id>}                        & GET, PUT, DELETE & \texttt{@jwt\_required} \\
+\texttt{/quests/<id>/cancel}                 & POST           & \texttt{@jwt\_required} \\
+\texttt{/quests/<id>/movimientos}            & GET, POST      & \texttt{@jwt\_required} \\
+\texttt{/quests/<id>/colaboradores}          & GET, POST      & \texttt{@jwt\_required} \\
+\texttt{/gastos}                             & GET, POST      & \texttt{@jwt\_required} \\
+\texttt{/categorias-gasto}                   & GET            & \texttt{@jwt\_required} \\
+\texttt{/insignias}                          & GET            & \texttt{@jwt\_required} \\
+\texttt{/notificaciones}                     & GET            & \texttt{@jwt\_required} \\
+\texttt{/notificaciones/<id>/leer}           & POST           & \texttt{@jwt\_required} \\
+\texttt{/perfil}                             & GET, PATCH     & \texttt{@jwt\_required} \\
+\bottomrule
+\end{tabular}
+\captionof{table}{Endpoints de la API y su nivel de protección.}
+\end{center}
+
+Sobre el token, los endpoints que tocan recursos de un usuario concreto aplican además una
+verificación de \emph{pertenencia}: por ejemplo \texttt{GET /quests/<id>} responde
+\http{qcRed}{403 forbidden} si el usuario autenticado no participa en esa meta. Autenticar
+no es lo mismo que autorizar, y ambas capas están presentes.
+
+\subsection{Consumo desde la app móvil}
+
+En \texttt{questcash\_mobile} el token se guarda en \texttt{expo-secure-store} (Keychain en
+iOS, Keystore en Android; no en \texttt{AsyncStorage}, que es texto plano) y un interceptor
+de Axios lo adjunta automáticamente a cada petición:
+
+\begin{lstlisting}[style=python,caption={\texttt{src/services/api.ts} — inyección del token y reacción al 401.}]
+client.interceptors.request.use(async (config) => {
+  const token = await SecureStore.getItemAsync(TOKEN_KEY);
+  if (token) {
+    config.headers = config.headers ?? {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+client.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      onUnauthorized?.();   // -> AuthContext borra el token y regresa al login
+    }
+    return Promise.reject(error);
+  }
+);
+\end{lstlisting}
+
+Con esto el manejo de expiración queda cerrado de extremo a extremo: cuando el token vence,
+el backend responde \http{qcRed}{401 token\_expired}, el interceptor lo detecta,
+\texttt{AuthContext} borra el token del almacenamiento seguro y el navegador raíz devuelve
+al usuario a la pantalla de \emph{login}. No hay estado colgado ni pantallas mostrando datos
+de una sesión ya inválida.
+
+% =====================  3. EVIDENCIA  =====================
+\section{Evidencia de pruebas}
+\label{sec:evidencia}
+
+\subsection{Cómo se ejecutaron}
+
+Se levantó una instancia de Flask que monta el decorador \texttt{@jwt\_required} y la función
+\texttt{generate\_token()} \textbf{tal cual están en el proyecto} (archivos \texttt{auth\_jwt.py}
+y \texttt{config.py} sin modificar), sobre dos endpoints representativos:
+\texttt{/api/v1/auth/me} y \texttt{/api/v1/dashboard}. Contra esa instancia se corrió la
+batería \texttt{pruebas.sh} con \texttt{curl}. Las salidas siguientes son literales.
+
+\begin{nota}
+\textbf{Nota de reproducibilidad.} El servidor de prueba sustituye únicamente la capa de
+acceso a datos por un objeto \texttt{Usuario} en memoria; la lógica de autenticación
+evaluada es la del proyecto, sin cambios. El script \texttt{pruebas.sh} apunta a
+\texttt{http://127.0.0.1:5001/api/v1}, que es exactamente la URL base que usa la app móvil
+en desarrollo, así que puede ejecutarse igual contra el backend completo levantando
+\texttt{app.py} en el puerto 5001.
+\end{nota}
+
+\subsection{Resumen de resultados}
+
+\begin{center}
+\begin{tabular}{@{}c p{7.4cm} c c@{}}
+\toprule
+\textbf{\#} & \textbf{Escenario} & \textbf{Esperado} & \textbf{Obtenido} \\
+\midrule
+P0  & Login con credenciales válidas                       & 200 + token & \http{qcGreen}{200} \ok \\
+P0b & Login con contraseña incorrecta                       & 401 & \http{qcRed}{401} \ok \\
+P1  & \textbf{Endpoint protegido SIN token}                 & 401 & \http{qcRed}{401} \ok \\
+P2  & \textbf{Endpoint protegido CON token válido}          & 200 & \http{qcGreen}{200} \ok \\
+P3  & Token manipulado (\texttt{sub} alterado)              & 401 & \http{qcRed}{401} \ok \\
+P4  & Token expirado                                        & 401 & \http{qcRed}{401} \ok \\
+P5  & Token firmado con otra clave secreta                  & 401 & \http{qcRed}{401} \ok \\
+P6  & Esquema \texttt{Basic} en vez de \texttt{Bearer}      & 401 & \http{qcRed}{401} \ok \\
+P7  & Segundo endpoint protegido (\texttt{/dashboard})      & 401 / 200 & \http{qcRed}{401} / \http{qcGreen}{200} \ok \\
+P8  & Estructura del token emitido                          & HS256, \texttt{sub}/\texttt{iat}/\texttt{exp} & \ok \\
+\bottomrule
+\end{tabular}
+\captionof{table}{10 de 10 pruebas superadas.}
+\end{center}
+
+\subsection{P0 — El login devuelve un JWT}
+
+\begin{consola}[title={\$ curl -i -X POST /api/v1/auth/login -d '\{"correo":"...","password":"..."\}'}]
+\begin{lstlisting}[style=terminal]
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 202
+
+{"token":"<TOKEN-REDACTADO>",
+ "user":{"correo":"armando@questcash.mx","id":1}}
+\end{lstlisting}
+\end{consola}
+
+\noindent Con credenciales incorrectas (P0b) el mismo endpoint responde:
+
+\begin{consola}[title={\$ curl -i -X POST /api/v1/auth/login -d '\{"correo":"...","password":"incorrecta"\}'}]
+\begin{lstlisting}[style=terminal]
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+
+{"error":"invalid_credentials"}
+\end{lstlisting}
+\end{consola}
+
+\subsection{P1 — Sin token: la API rechaza \textnormal{(prueba central del entregable)}}
+
+\begin{consola}[title={\$ curl -i http://127.0.0.1:5001/api/v1/auth/me}]
+\begin{lstlisting}[style=terminal]
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+Content-Length: 26
+
+{"error":"missing_token"}
+\end{lstlisting}
+\end{consola}
+
+\noindent Sin encabezado \texttt{Authorization} la petición ni siquiera llega al cuerpo de la
+vista: el decorador corta antes y no se filtra ningún dato del usuario.
+
+\subsection{P2 — Con token válido: la API acepta \textnormal{(prueba central del entregable)}}
+
+\begin{consola}[title={\$ curl -i http://127.0.0.1:5001/api/v1/auth/me -H "Authorization: Bearer \$TOKEN"}]
+\begin{lstlisting}[style=terminal]
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 74
+
+{"user":{"correo":"armando@questcash.mx","id":1,"nombre":"Armando Yael"}}
+\end{lstlisting}
+\end{consola}
+
+\noindent Misma URL, mismo método, mismo servidor: la única diferencia entre P1 y P2 es el
+encabezado \texttt{Authorization}. Eso es exactamente lo que pide el entregable ED.
+
+\subsection{P3 — Token manipulado}
+
+Se tomó un token legítimo y se reescribió su \emph{payload} cambiando \texttt{"sub":"1"} por
+\texttt{"sub":"2"} (intento de suplantar a otro usuario), conservando la firma original:
+
+\begin{consola}[title={\$ curl -i /api/v1/auth/me -H "Authorization: Bearer <payload alterado>"}]
+\begin{lstlisting}[style=terminal]
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+
+{"error":"invalid_token"}
+\end{lstlisting}
+\end{consola}
+
+\noindent La firma HMAC deja de coincidir con el contenido y \texttt{PyJWT} lanza
+\texttt{InvalidTokenError}. Un JWT es legible por cualquiera, pero no modificable sin la
+clave secreta: esta prueba lo demuestra.
+
+\subsection{P4 — Token expirado}
+
+Token emitido con \texttt{exp} 10 segundos en el pasado:
+
+\begin{consola}[title={\$ curl -i /api/v1/auth/me -H "Authorization: Bearer <token vencido>"}]
+\begin{lstlisting}[style=terminal]
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+
+{"error":"token_expired"}
+\end{lstlisting}
+\end{consola}
+
+\noindent El código de error se distingue de \texttt{invalid\_token} a propósito: le permite
+al cliente saber que las credenciales eran correctas pero la sesión caducó, y actuar en
+consecuencia (renovar o mandar al login) en vez de mostrar un error genérico.
+
+\subsection{P5 — Token firmado con otra clave}
+
+Simula a un atacante que construye un JWT bien formado con su propia clave secreta:
+
+\begin{consola}[title={\$ curl -i /api/v1/auth/me -H "Authorization: Bearer <firmado por un tercero>"}]
+\begin{lstlisting}[style=terminal]
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+
+{"error":"invalid_token"}
+\end{lstlisting}
+\end{consola}
+
+\subsection{P6 — Esquema de autenticación incorrecto}
+
+\begin{consola}[title={\$ curl -i /api/v1/auth/me -H "Authorization: Basic <CREDENCIAL-REDACTADA>"}]
+\begin{lstlisting}[style=terminal]
+HTTP/1.1 401 UNAUTHORIZED
+Content-Type: application/json
+
+{"error":"missing_token"}
+\end{lstlisting}
+\end{consola}
+
+\noindent El middleware exige explícitamente el prefijo \texttt{Bearer }; cualquier otro
+esquema se trata como ausencia de token.
+
+\subsection{P7 — La protección no es un caso aislado}
+
+Se repitió el par sin token / con token contra un segundo endpoint protegido:
+
+\begin{consola}[title={\$ curl -o /dev/null -w "\%\{http\_code\}" /api/v1/dashboard}]
+\begin{lstlisting}[style=terminal]
+sin token   -> 401
+con Bearer  -> 200
+\end{lstlisting}
+\end{consola}
+
+\subsection{P8 — Estructura del token emitido}
+
+\begin{consola}[title={Decodificación del token (base64url, sin verificar firma)}]
+\begin{lstlisting}[style=terminal]
+header  : {"alg": "HS256", "typ": "JWT"}
+payload : {"sub": "1", "iat": 1786926351, "exp": 1789518351}
+iat     : 2026-08-17T00:25:51+00:00
+exp     : 2026-09-16T00:25:51+00:00
+vigencia: 30.0 dias
+firma   : NyrifCFB8aGz-iEx3RF6... (43 chars)
+\end{lstlisting}
+\end{consola}
+
+\noindent El token contiene solo el identificador del usuario y las marcas de tiempo: no
+lleva contraseña, ni correo, ni datos personales. Como el payload de un JWT viaja en
+base64url (legible, no cifrado), incluir ahí información sensible sería un error; aquí no se
+incluye.
+
+% =====================  4. HTTPS  =====================
+\section{Estado de la conexión segura (HTTPS)}
+\label{sec:https}
+
+Este es el punto del objetivo semanal que \textbf{aún no está cerrado} y conviene declararlo
+con claridad en vez de darlo por hecho.
+
+\vspace{0.4em}
+\begin{center}
+\begin{tabular}{@{}l l p{6.6cm}@{}}
+\toprule
+\textbf{Entorno} & \textbf{Protocolo} & \textbf{Situación} \\
+\midrule
+Desarrollo (Expo + Flask) & \texttt{http://} & \texttt{SERVER\_ORIGIN} se arma como \texttt{http://<host>:5001}. Tráfico en la red local. \\[3pt]
+Docker (\texttt{docker-compose}) & \texttt{http://} & El servicio \texttt{web} expone el puerto 80 sin TLS. \\[3pt]
+Cookies de sesión web & --- & \texttt{SESSION\_COOKIE\_SECURE = False} en \texttt{config.py}, con el comentario \emph{``cambia a True si usas HTTPS''}. \\
+\bottomrule
+\end{tabular}
+\captionof{table}{Estado actual del transporte.}
+\end{center}
+
+\vspace{0.5em}
+En desarrollo local esto es aceptable y es la práctica habitual: el certificado autofirmado
+rompe el cliente de Expo y no aporta seguridad real en \texttt{localhost}. Pero el token JWT
+viaja en un encabezado en texto plano, así que \textbf{sobre HTTP cualquiera en la misma red
+puede interceptarlo y reutilizarlo}. La autenticación por token y el TLS no son alternativas:
+el token identifica \emph{quién} pide, y el TLS impide que alguien más lo copie en el camino.
+
+\subsection*{Pasos pendientes para cerrar el punto}
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=3pt]
+  \item Poner un proxy inverso (Nginx o Caddy) delante de Gunicorn y terminar TLS ahí, con
+        certificado de Let's Encrypt. Caddy lo hace automáticamente con dos líneas de
+        configuración.
+  \item Redirigir todo \texttt{http://} a \texttt{https://} y añadir la cabecera
+        \texttt{Strict-Transport-Security} (HSTS).
+  \item Cambiar \texttt{SESSION\_COOKIE\_SECURE} a \texttt{True} en producción.
+  \item En la app móvil, dejar que App Transport Security (iOS) y
+        \texttt{cleartextTrafficPermitted=false} (Android) bloqueen HTTP en el build de
+        producción, permitiéndolo solo en desarrollo.
+  \item Mover \texttt{JWT\_SECRET\_KEY} a variable de entorno con un valor fuerte. Hoy cae por
+        defecto a \texttt{SECRET\_KEY}, que a su vez cae a \texttt{"dev\_key"} si no está
+        definida; en producción esa cadena permitiría a cualquiera firmar tokens válidos.
+\end{enumerate}
+
+% =====================  5. CONCLUSIONES  =====================
+\section{Conclusiones}
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=4pt]
+  \item \textbf{El entregable ED está cubierto.} Las pruebas P1 y P2 muestran, sobre la misma
+        URL y con la única diferencia del encabezado \texttt{Authorization}, que un endpoint
+        protegido responde \http{qcRed}{401} sin token y \http{qcGreen}{200} con token válido.
+  \item \textbf{La cobertura es amplia, no simbólica.} 20 de 23 endpoints exigen token; los
+        3 públicos son los de registro y login. Encima de la autenticación hay verificación de
+        pertenencia (\http{qcRed}{403}) en los recursos por usuario.
+  \item \textbf{Los tres modos de fallo están diferenciados}
+        (\texttt{missing\_token}, \texttt{invalid\_token}, \texttt{token\_expired}), lo que le
+        permite al cliente móvil reaccionar distinto a cada uno.
+  \item \textbf{El ciclo de expiración está cerrado de extremo a extremo}: el backend devuelve
+        401, el interceptor de Axios lo detecta, se borra el token del almacenamiento seguro y
+        la app vuelve al login.
+  \item \textbf{Queda pendiente el HTTPS} y el endurecimiento de la clave secreta. Es el único
+        punto del objetivo semanal que no está terminado y está detallado en la
+        sección \ref{sec:https}.
+\end{enumerate}
+
+\vspace{1em}
+\begin{nota}
+\textbf{Sugerencia para la siguiente iteración:} la vigencia de 30 días es cómoda para el
+usuario pero larga para un token que no se puede revocar. El patrón habitual es un
+\emph{access token} corto (15--60 minutos) más un \emph{refresh token} de larga duración
+almacenado en la base de datos, que sí puede invalidarse al cerrar sesión o ante un incidente.
+\end{nota}
+
+% =====================  ANEXO  =====================
+\newpage
+\section*{Anexo A — Salida completa de la batería de pruebas}
+\addcontentsline{toc}{section}{Anexo A}
+
+\begin{consola}[title={\$ ./pruebas.sh}]
+\begin{lstlisting}[style=terminal]
+========================================================
+ P0 - LOGIN con credenciales validas => devuelve JWT (200)
+========================================================
+HTTP/1.1 200 OK
+{"token":"<TOKEN-REDACTADO>","user":{"correo":"armando@questcash.mx","id":1}}
+
+========================================================
+ P0b - LOGIN con contrasena incorrecta => 401 invalid_credentials
+========================================================
+HTTP/1.1 401 UNAUTHORIZED
+{"error":"invalid_credentials"}
+
+========================================================
+ P1 - GET /auth/me SIN token => RECHAZA (401 missing_token)
+========================================================
+HTTP/1.1 401 UNAUTHORIZED
+{"error":"missing_token"}
+
+========================================================
+ P2 - GET /auth/me CON token valido => ACEPTA (200)
+========================================================
+HTTP/1.1 200 OK
+{"user":{"correo":"armando@questcash.mx","id":1,"nombre":"Armando Yael"}}
+
+========================================================
+ P3 - Token MANIPULADO (payload sub 1 -> 2, firma original) => 401 invalid_token
+========================================================
+HTTP/1.1 401 UNAUTHORIZED
+{"error":"invalid_token"}
+
+========================================================
+ P4 - Token EXPIRADO => 401 token_expired
+========================================================
+HTTP/1.1 401 UNAUTHORIZED
+{"error":"token_expired"}
+
+========================================================
+ P5 - Token firmado con OTRA clave secreta => 401 invalid_token
+========================================================
+HTTP/1.1 401 UNAUTHORIZED
+{"error":"invalid_token"}
+
+========================================================
+ P6 - Esquema de cabecera incorrecto (Basic en vez de Bearer) => 401 missing_token
+========================================================
+HTTP/1.1 401 UNAUTHORIZED
+{"error":"missing_token"}
+
+========================================================
+ P7 - Segundo endpoint protegido /dashboard: sin token vs con token
+========================================================
+sin token   -> 401
+con Bearer  -> 200
+
+========================================================
+ P8 - Contenido del token emitido (header y payload decodificados)
+========================================================
+header  : {"alg": "HS256", "typ": "JWT"}
+payload : {"sub": "1", "iat": 1786926351, "exp": 1789518351}
+iat     : 2026-08-17T00:25:51+00:00
+exp     : 2026-09-16T00:25:51+00:00
+vigencia: 30.0 dias
+firma   : NyrifCFB8aGz-iEx3RF6... (43 chars)
+\end{lstlisting}
+\end{consola}
+
+\vspace{0.8em}
+\noindent\textbf{Archivos de referencia del proyecto}
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+  \item \texttt{questcash\_web/auth\_jwt.py} — generación y validación del token, decorador \texttt{@jwt\_required}.
+  \item \texttt{questcash\_web/api.py} — blueprint \texttt{/api/v1}, login y endpoints protegidos.
+  \item \texttt{questcash\_web/config.py} — \texttt{JWT\_SECRET\_KEY}, \texttt{JWT\_EXP\_DAYS}.
+  \item \texttt{questcash\_mobile/src/services/api.ts} — interceptores de Axios.
+  \item \texttt{questcash\_mobile/src/context/AuthContext.tsx} — sesión, logout automático ante 401.
+\end{itemize}
+
+\end{document}

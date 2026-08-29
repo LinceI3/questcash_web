@@ -1,0 +1,1133 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "QuestCash API",
+    "version": "1.0.0",
+    "description": "API de QuestCash. Autenticación por Bearer token: un access de 60 minutos que se renueva en `/auth/refresh` con un refresh rotatorio.\n\nLos importes viajan como número JSON y se guardan en la base como `Numeric(14,2)`: la aritmética es decimal exacta, sin deriva de centavos.\n\nLas operaciones que crean algo aceptan `Idempotency-Key` para que un doble toque o un reintento no las registren dos veces."
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "paths": {
+    "/auth/cuenta": {
+      "delete": {
+        "summary": "Elimina la cuenta. Irreversible; exige la contraseña.",
+        "tags": [
+          "Cuenta"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "summary": "Inicia sesión. Cinco intentos fallidos bloquean la cuenta 5 minutos.",
+        "tags": [
+          "Sesión"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "summary": "Cierra esta sesión en el servidor.",
+        "tags": [
+          "Sesión"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          }
+        }
+      }
+    },
+    "/auth/logout-all": {
+      "post": {
+        "summary": "Cierra la sesión en todos los dispositivos.",
+        "tags": [
+          "Sesión"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "summary": "Datos de la cuenta y rango actual.",
+        "tags": [
+          "Sesión"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/auth/mis-datos": {
+      "get": {
+        "summary": "Descarga todo lo que QuestCash guarda de esta persona.",
+        "tags": [
+          "Cuenta"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/auth/password": {
+      "put": {
+        "summary": "Cambia la contraseña. Cierra las demás sesiones y devuelve una nueva.",
+        "tags": [
+          "Cuenta"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/auth/recuperar": {
+      "post": {
+        "summary": "Pide un enlace de recuperación. Responde igual exista o no la cuenta.",
+        "tags": [
+          "Cuenta"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "summary": "Canjea el refresh token por un par nuevo. El anterior deja de valer.",
+        "tags": [
+          "Sesión"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "summary": "Crea una cuenta y devuelve una sesión.",
+        "tags": [
+          "Sesión"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          }
+        }
+      }
+    },
+    "/auth/sesiones": {
+      "get": {
+        "summary": "Dispositivos con sesión abierta. No expone ningún token.",
+        "tags": [
+          "Sesión"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/categorias-gasto": {
+      "get": {
+        "summary": "Categorías del sistema más las propias. Nunca las de otra persona.",
+        "tags": [
+          "Gastos"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/dashboard": {
+      "get": {
+        "summary": "Resumen de inicio: metas, totales, rachas y lectura de Questy.",
+        "tags": [
+          "Metas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/estadisticas": {
+      "get": {
+        "summary": "Series históricas de ahorro.",
+        "tags": [
+          "Metas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/gastos": {
+      "get": {
+        "summary": "Gastos del período. La lista pagina; los totales cubren el período entero.",
+        "tags": [
+          "Gastos"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "`next_cursor` de la página anterior."
+          }
+        ]
+      },
+      "post": {
+        "summary": "Registra un gasto. Acepta Idempotency-Key.",
+        "tags": [
+          "Gastos"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          },
+          "409": {
+            "description": "Otra petición con la misma clave está en curso"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repetir la operación con la misma clave devuelve la respuesta original en vez de ejecutarla otra vez."
+          }
+        ]
+      }
+    },
+    "/insignias": {
+      "get": {
+        "summary": "Catálogo completo, marcando las obtenidas.",
+        "tags": [
+          "Gamificación"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/invitaciones": {
+      "get": {
+        "summary": "Invitaciones dirigidas a mí, pendientes de respuesta.",
+        "tags": [
+          "Colaboración"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/invitaciones/{invitacion_id}/aceptar": {
+      "post": {
+        "summary": "Acepta una invitación y entra en la meta.",
+        "tags": [
+          "Colaboración"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "invitacion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/invitaciones/{invitacion_id}/rechazar": {
+      "post": {
+        "summary": "Rechaza una invitación.",
+        "tags": [
+          "Colaboración"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "invitacion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/notificaciones": {
+      "get": {
+        "summary": "Notificaciones persistidas y avisos calculados al vuelo.",
+        "tags": [
+          "Gamificación"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/notificaciones/{notif_id}/leer": {
+      "post": {
+        "summary": "Marca una notificación como leída.",
+        "tags": [
+          "Gamificación"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "notif_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/perfil": {
+      "get": {
+        "summary": "Perfil y rango.",
+        "tags": [
+          "Cuenta"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "summary": "Actualiza nombre, alias y preferencias de notificación.",
+        "tags": [
+          "Cuenta"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/quests": {
+      "get": {
+        "summary": "Metas propias y compartidas.",
+        "tags": [
+          "Metas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Crea una meta. Acepta Idempotency-Key.",
+        "tags": [
+          "Metas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          },
+          "409": {
+            "description": "Otra petición con la misma clave está en curso"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repetir la operación con la misma clave devuelve la respuesta original en vez de ejecutarla otra vez."
+          }
+        ]
+      }
+    },
+    "/quests/{quest_id}": {
+      "get": {
+        "summary": "Detalle de una meta, con participantes y evaluación de Questy.",
+        "tags": [
+          "Metas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "quest_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "summary": "Edita una meta. Solo el creador.",
+        "tags": [
+          "Metas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "quest_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Elimina una meta y sus movimientos. Solo el creador.",
+        "tags": [
+          "Metas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "quest_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/quests/{quest_id}/abandonar": {
+      "post": {
+        "summary": "Sale de una meta compartida. Los aportes hechos se conservan.",
+        "tags": [
+          "Colaboración"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "quest_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/quests/{quest_id}/cancel": {
+      "post": {
+        "summary": "Cancela una meta. Solo el creador.",
+        "tags": [
+          "Metas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "quest_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/quests/{quest_id}/colaboradores": {
+      "get": {
+        "summary": "Participantes de la meta. No expone sus correos.",
+        "tags": [
+          "Colaboración"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "quest_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Invita por correo. NO añade a nadie: crea una invitación.",
+        "tags": [
+          "Colaboración"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "quest_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/quests/{quest_id}/invitaciones": {
+      "get": {
+        "summary": "Invitaciones pendientes de la meta. Solo el creador.",
+        "tags": [
+          "Colaboración"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "quest_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/quests/{quest_id}/movimientos": {
+      "get": {
+        "summary": "Movimientos de una meta. Paginado por cursor.",
+        "tags": [
+          "Movimientos"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          }
+        },
+        "parameters": [
+          {
+            "name": "quest_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "`next_cursor` de la página anterior."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Registra un aporte o retiro. Acepta Idempotency-Key.",
+        "tags": [
+          "Movimientos"
+        ],
+        "responses": {
+          "200": {
+            "description": "Correcto"
+          },
+          "400": {
+            "description": "Datos inválidos; el cuerpo trae `errors`"
+          },
+          "401": {
+            "description": "`token_expired` (renovable), `token_revoked` o `invalid_token`"
+          },
+          "403": {
+            "description": "No es tuyo"
+          },
+          "409": {
+            "description": "Otra petición con la misma clave está en curso"
+          }
+        },
+        "parameters": [
+          {
+            "name": "quest_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repetir la operación con la misma clave devuelve la respuesta original en vez de ejecutarla otra vez."
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    }
+  }
+}

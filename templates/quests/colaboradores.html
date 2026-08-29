@@ -37,7 +37,9 @@
         <li class="list-group-item d-flex justify-content-between align-items-center">
           <span>
             {{ p.usuario.nombre }}<br>
-            <small class="text-muted">{{ p.usuario.correo }}</small>
+            {# El correo de un participante no se muestra a los demás: es un dato
+               personal de un tercero que no acordó compartirlo con ellos. #}
+            <small class="text-muted">{{ p.usuario.alias or p.rol|capitalize }}</small>
           </span>
           <span class="badge bg-secondary text-capitalize">{{ p.rol }}</span>
         </li>
@@ -45,6 +47,23 @@
       </ul>
     {% else %}
       <p class="text-muted">Por ahora solo tú participas en este reto.</p>
+    {% endif %}
+
+    {% if invitaciones_pendientes %}
+      <h6 class="mt-4 mb-2 text-muted">Invitaciones pendientes</h6>
+      <ul class="list-group">
+        {% for inv in invitaciones_pendientes %}
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+          {# Este correo sí se muestra: quien lo lee es quien lo escribió al
+             invitar, no un tercero. #}
+          <span>{{ inv.correo }}</span>
+          <span class="badge bg-warning text-dark">Pendiente de aceptar</span>
+        </li>
+        {% endfor %}
+      </ul>
+      <p class="text-muted small mt-2">
+        Aparecerán en la lista de participantes cuando acepten la invitación.
+      </p>
     {% endif %}
   </div>
 </div>

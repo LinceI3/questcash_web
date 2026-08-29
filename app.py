@@ -1,7 +1,12 @@
 # app.py
+import json
 import math
+import os
+from decimal import Decimal
+from flask.json.provider import DefaultJSONProvider
 from flask import (
     Flask,
+    jsonify,
     render_template,
     redirect,
     url_for,
@@ -17,11 +22,17 @@ import re
 
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import generate_csrf
+from flask_migrate import Migrate
 
 from config import Config
+from crypto_utils import indice_ciego
 from models import (
     db,
+    ClaveIdempotencia,
+    InvitacionQuest,
     Quest,
+    Sesion,
+    TokenCorreo,
     Usuario,
     Movimiento,
     ParticipacionQuest,
@@ -29,200 +40,194 @@ from models import (
     UsuarioInsignia,
     CategoriaGasto,
     Gasto,
+    Notificacion,
 )
 
-from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import generate_password_hash, check_password_hash  # noqa: F401 (compatibilidad)
+from password_hashing import hashear_password, necesita_rehash, verificar_password
 from ia.services.questy_engine import QuestyInput, evaluate_quest
 from validators import (
+    validar_password_nueva,
     validar_registro,
     validar_quest_form,
     validar_movimiento,
     validar_gasto,
 )
+import observabilidad
 from api import register_api
+from services import analisis
+from services import gastos as gastos_svc
+from services import metas as metas_svc
+from services import movimientos as movimientos_svc
+from services import insignias as insignias_svc
+from services import puntos as puntos_svc
+from services import rachas, rangos
+import correo as correo_mod
+import rate_limit
+import tokens_correo
+from auth_jwt import revocar_todas_las_sesiones
 
 csrf = CSRFProtect()
+migrate = Migrate()
 
-# ----------------- Control de intentos de login (anti fuerza bruta) -----------------
-MAX_LOGIN_INTENTOS = 5
-BLOQUEO_MINUTOS = 5
-intentos_login = {}  # clave: correo+ip, valor: {"intentos": int, "bloqueado_hasta": datetime}
+# El control de intentos vive ahora en rate_limit.py, con el estado en Redis:
+# el diccionario que había aquí no se compartía entre workers (cada uno daba
+# sus propios 5 intentos) y no se limpiaba nunca (crecía sin límite con cada
+# correo probado). Ver rate_limit.py para el detalle.
+MAX_LOGIN_INTENTOS = rate_limit.MAX_INTENTOS
+BLOQUEO_MINUTOS = rate_limit.BLOQUEO_SEGUNDOS // 60
 
 
 # ----------------- Insignias: semillas y helpers -----------------
 def seed_insignias():
-    """Crea un set básico de insignias si no existen."""
-    base = [
-        {
-            "codigo": "PRIMER_AHORRO",
-            "nombre": "Primer ahorro registrado",
-            "descripcion": "Registraste tu primer aporte de ahorro.",
-            "rareza": "común",
-            "icono": "primer_ahorro.png",
-        },
-        {
-            "codigo": "PRIMERA_META",
-            "nombre": "Primera meta creada",
-            "descripcion": "Creaste tu primera meta en QuestCash.",
-            "rareza": "rara",
-            "icono": "Primera_meta.png",
-        },
-        {
-            "codigo": "PRIMER_RETO",
-            "nombre": "Primer reto completado",
-            "descripcion": "Completaste tu primer reto de ahorro.",
-            "rareza": "épica",
-            "icono": "primer_reto.png",
-        },
-        {
-            "codigo": "AHORRO_1000",
-            "nombre": "Has ahorrado $1,000 MXN",
-            "descripcion": "Alcanzaste un total acumulado de $1,000 MXN.",
-            "rareza": "legendaria",
-            "icono": "Ahorro_1000.png",
-        },
-        {
-            "codigo": "META_A_TIEMPO",
-            "nombre": "Meta cumplida a tiempo",
-            "descripcion": "Completaste un reto antes o justo en la fecha límite.",
-            "rareza": "mítica",
-            "icono": "Meta_tiempo.png",
-        },
-    ]
+    """Compatibilidad: el catálogo vive en services/insignias.py."""
+    insignias_svc.sembrar()
 
-    for data in base:
-        if not Insignia.query.filter_by(codigo=data["codigo"]).first():
-            db.session.add(Insignia(**data))
-    db.session.commit()
-    ahorro = Insignia.query.filter_by(codigo="AHORRO_1000").first()
-    if ahorro and ahorro.icono != "Ahorro_1000.png":
-        ahorro.icono = "Ahorro_1000.png"
-        db.session.commit()
+
+RAREZA_COLORS = insignias_svc.COLOR_POR_RAREZA
+
+
+def crear_notificacion(usuario, tipo, titulo, mensaje, icono=None, color=None, quest=None):
+    """Crea una notificación persistida (evento real: meta completada,
+    insignia nueva, aporte de un colaborador). Sin commit aquí; el caller
+    es responsable, igual que otorgar_insignia."""
+    notif = Notificacion(
+        usuario_id=usuario.id,
+        tipo=tipo,
+        titulo=titulo,
+        mensaje=mensaje,
+        icono=icono,
+        color=color,
+        quest_id=quest.id if quest is not None else None,
+    )
+    db.session.add(notif)
+    return notif
+
+
+def seed_insignias_si_faltan():
+    """Siembra las insignias base. Es datos, no esquema: la ejecuta
+    scripts/preparar_bd.py después de aplicar las migraciones, no el arranque
+    de la aplicación. Idempotente."""
+    seed_insignias()
+
+
+class ProveedorJSONDinero(DefaultJSONProvider):
+    """Serializa los importes Decimal como números JSON.
+
+    Las columnas de dinero son Numeric y SQLAlchemy las devuelve como Decimal,
+    que el serializador de Flask no sabe convertir. Se emiten como número —no
+    como cadena— para no romper a los clientes que ya existen: la app móvil
+    tipa estos campos como `number` (questcash_mobile/src/types).
+
+    Es seguro: el defecto que corrige Numeric era el error ACUMULADO al sumar
+    repetidamente sobre el saldo, y esa aritmética ahora ocurre en Decimal
+    dentro de la base y de Python. Un importe suelto de dos decimales por
+    debajo de 2^53 centavos viaja por un `double` de JSON sin perder nada.
+    """
+
+    @staticmethod
+    def default(objeto):
+        if isinstance(objeto, Decimal):
+            return float(objeto)
+        return DefaultJSONProvider.default(objeto)
 
 
 def create_app():
     app = Flask(__name__)
+    app.json = ProveedorJSONDinero(app)
     app.config.from_object(Config)
 
+    # Detrás de un proxy inverso (el gateway Nginx, o el de Render), la
+    # dirección que ve Flask es la del proxy, no la del usuario. Eso importa
+    # porque el control de intentos de inicio de sesión agrupa por correo+IP:
+    # con todas las peticiones llegando desde la misma IP, un atacante agota
+    # los intentos de cualquier cuenta y de paso bloquea a los demás.
+    #
+    # ProxyFix hace que request.remote_addr y request.scheme salgan de
+    # X-Forwarded-For / X-Forwarded-Proto. Va DESACTIVADO por omisión y se
+    # activa con PROXY_FIX_HOPS=1: confiar en esas cabeceras sin un proxy
+    # delante permitiría a cualquiera falsificar su IP enviándolas él mismo.
+    saltos = int(os.environ.get("PROXY_FIX_HOPS", "0"))
+    if saltos > 0:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=saltos, x_proto=saltos, x_host=saltos)
+
+    # Antes que nada: si algo falla al montar el resto, que quede registrado.
+    observabilidad.init_app(app)
+
     db.init_app(app)
+    migrate.init_app(app, db)
     csrf.init_app(app)
+
+    # ----------------- Cabeceras de seguridad -----------------
+    #
+    # Antes no se enviaba ninguna. Sin ellas, cualquier XSS futuro escala sin
+    # fricción, la página se puede embeber en un iframe ajeno para engañar al
+    # usuario, y el navegador adivina tipos de contenido que no debería.
+
+    # Orígenes de los que la web carga hoy código y estilos. Se listan
+    # explícitamente: cualquier otro queda bloqueado por el navegador.
+    #
+    # Ya no hay ningún origen externo: Bootstrap, sus iconos, three.js, GSAP y
+    # vanilla-tilt se sirven desde static/vendor/. Eso cierra tres cosas de
+    # golpe — el riesgo de que un CDN comprometido inyecte código en una app
+    # financiera, la fuga de la IP de cada visitante a tres terceros no
+    # declarados en ningún aviso de privacidad, y la dependencia de que esos
+    # servicios sigan disponibles.
+    #
+    # 'unsafe-inline' sigue en script-src y style-src porque las plantillas
+    # llevan bloques <script>, manejadores onclick y atributos style en línea.
+    # Quitarlo exige moverlos a static/js/, y es lo único que falta para tener
+    # una CSP estricta.
+    CSP = "; ".join([
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline'",
+        "font-src 'self' data:",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+        "base-uri 'self'",
+        "object-src 'none'",
+    ])
+
+    @app.after_request
+    def cabeceras_de_seguridad(respuesta):
+        respuesta.headers.setdefault("Content-Security-Policy", CSP)
+        # No adivinar el tipo de contenido: evita que una imagen subida se
+        # interprete como HTML o JavaScript.
+        respuesta.headers.setdefault("X-Content-Type-Options", "nosniff")
+        # Redundante con frame-ancestors, pero lo entienden navegadores viejos.
+        respuesta.headers.setdefault("X-Frame-Options", "DENY")
+        # No filtrar la ruta completa al salir hacia un tercero.
+        respuesta.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        # QuestCash no usa ninguna de estas capacidades.
+        respuesta.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        )
+
+        # HSTS solo cuando la conexión ya es segura: enviarlo por HTTP no tiene
+        # efecto, y activarlo en desarrollo sobre localhost dejaría el
+        # navegador negándose a abrir http://localhost durante meses.
+        if request.is_secure:
+            respuesta.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
+        return respuesta
 
     @app.context_processor
     def inject_csrf():
         # Permite usar {{ csrf_token() }} en las plantillas
         return dict(csrf_token=generate_csrf)
 
-    PROFILE_RANKS = [
-        {
-            "key": "recluta",
-            "name": "Recluta del Ahorro",
-            "min_points": 0,
-            "color": "#9CA3AF",
-            "accent": "#E5E7EB",
-        },
-        {
-            "key": "cabo",
-            "name": "Cabo Financiero",
-            "min_points": 250,
-            "color": "#22C55E",
-            "accent": "#BBF7D0",
-        },
-        {
-            "key": "sargento",
-            "name": "Sargento del Ahorro",
-            "min_points": 700,
-            "color": "#3B82F6",
-            "accent": "#BFDBFE",
-        },
-        {
-            "key": "veterano",
-            "name": "Veterano Financiero",
-            "min_points": 1400,
-            "color": "#8B5CF6",
-            "accent": "#DDD6FE",
-        },
-        {
-            "key": "comandante",
-            "name": "Comandante del Ahorro",
-            "min_points": 2400,
-            "color": "#DC2626",
-            "accent": "#FECACA",
-        },
-        {
-            "key": "elite",
-            "name": "Élite Financiero",
-            "min_points": 3800,
-            "color": "#F59E0B",
-            "accent": "#FDE68A",
-        },
-        {
-            "key": "leyenda",
-            "name": "Leyenda Quest",
-            "min_points": 6000,
-            "color": "#FACC15",
-            "accent": "#FEF08A",
-        },
-        {
-            "key": "jefe_maestro",
-            "name": "Jefe Maestro del Ahorro",
-            "min_points": 9000,
-            "color": "#10B981",
-            "accent": "#FBBF24",
-        },
-    ]
-
-    def obtener_rango_perfil(puntos_totales):
-        puntos = int(puntos_totales or 0)
-        rango_actual = PROFILE_RANKS[0]
-        for rango in PROFILE_RANKS:
-            if puntos >= rango["min_points"]:
-                rango_actual = rango
-            else:
-                break
-        return rango_actual
-
-    def obtener_siguiente_rango_perfil(puntos_totales):
-        puntos = int(puntos_totales or 0)
-        for rango in PROFILE_RANKS:
-            if puntos < rango["min_points"]:
-                return rango
-        return None
-
-    def calcular_estado_rango_perfil(puntos_totales):
-        puntos = int(puntos_totales or 0)
-        rango_actual = obtener_rango_perfil(puntos)
-        siguiente_rango = obtener_siguiente_rango_perfil(puntos)
-
-        piso_actual = int(rango_actual["min_points"])
-        if siguiente_rango:
-            techo_siguiente = int(siguiente_rango["min_points"])
-            tramo_total = max(techo_siguiente - piso_actual, 1)
-            progreso_tramo = puntos - piso_actual
-            progreso_pct = max(0.0, min((progreso_tramo / tramo_total) * 100, 100.0))
-            puntos_restantes = max(techo_siguiente - puntos, 0)
-        else:
-            techo_siguiente = None
-            tramo_total = 0
-            progreso_tramo = 0
-            progreso_pct = 100.0
-            puntos_restantes = 0
-
-        return {
-            "current": rango_actual,
-            "next": siguiente_rango,
-            "current_name": rango_actual["name"],
-            "current_key": rango_actual["key"],
-            "current_color": rango_actual["color"],
-            "current_accent": rango_actual["accent"],
-            "current_min_points": piso_actual,
-            "next_name": siguiente_rango["name"] if siguiente_rango else None,
-            "next_min_points": techo_siguiente,
-            "points": puntos,
-            "points_into_rank": max(progreso_tramo, 0),
-            "points_remaining": puntos_restantes,
-            "progress_percent": round(progreso_pct, 1),
-            "is_max_rank": siguiente_rango is None,
-        }
+    # El escalafón y su aritmética viven en services/rangos.py: son funciones
+    # puras y no tienen por qué estar dentro de una factory de Flask.
+    PROFILE_RANKS = rangos.RANGOS
+    obtener_rango_perfil = rangos.rango_de
+    obtener_siguiente_rango_perfil = rangos.siguiente_rango
+    calcular_estado_rango_perfil = rangos.estado
 
     def emitir_flash_logro(titulo, mensaje, extra=None):
         payload = {
@@ -303,1323 +308,98 @@ def create_app():
         return wrapped_view
 
     # Helper: obtener todos los quests en los que participa el usuario (propios + colaborativos)
-    def obtener_quests_usuario(usuario):
-        # Propios (creador)
-        quests_propios = Quest.query.filter_by(usuario_id=usuario.id).all()
+    # Efectos de interfaz que services/movimientos necesita disparar pero no
+    # debe conocer: los avisos emergentes son cosa de la web.
+    class _EfectosWeb(movimientos_svc.Efectos):
+        emitir_flash_logro = staticmethod(lambda *a, **k: emitir_flash_logro(*a, **k))
+        emitir_flash_subida_rango = staticmethod(lambda *a, **k: emitir_flash_subida_rango(*a, **k))
+        crear_notificacion = staticmethod(lambda *a, **k: crear_notificacion(*a, **k))
+        checar_insignias_por_evento = staticmethod(lambda *a, **k: checar_insignias_por_evento(*a, **k))
 
-        # Colaborativos donde es colaborador (incluye creador si lo registramos también)
-        quests_colab = (
-            Quest.query
-            .join(ParticipacionQuest)
-            .filter(ParticipacionQuest.usuario_id == usuario.id)
-            .all()
-        )
+    _efectos_web = _EfectosWeb()
 
-        # Quitar duplicados
-        quests_dict = {q.id: q for q in quests_propios}
-        for q in quests_colab:
-            quests_dict.setdefault(q.id, q)
+    def otorgar_puntos_por_completado(quest, events=None):
+        return movimientos_svc.otorgar_puntos_por_completado(quest, events=events, efectos=_efectos_web)
 
-        return list(quests_dict.values())
+    def otorgar_bonus_racha(usuario, rachas_antes, rachas_despues, events=None):
+        return movimientos_svc.otorgar_bonus_racha(
+            usuario, rachas_antes, rachas_despues, events=events, efectos=_efectos_web)
 
-    # Helper: verificar ownership / participación (creador o colaborador)
-    def usuario_participa_en_quest(usuario, quest):
-        if quest.usuario_id == usuario.id:
-            return True
-        participacion = ParticipacionQuest.query.filter_by(
-            usuario_id=usuario.id,
-            quest_id=quest.id
-        ).first()
-        return participacion is not None
+    def procesar_registro_movimiento(usuario, quest, tipo, monto_float, nota, categoria, events=None):
+        return movimientos_svc.procesar_registro_movimiento(
+            usuario, quest, tipo, monto_float, nota, categoria,
+            events=events, efectos=_efectos_web)
+
+    # ----------------- Lógica de negocio, en services/ -----------------
+    #
+    # Estas eran closures de casi mil líneas dentro de esta misma función. Se
+    # mantienen los nombres locales para no reescribir las veintitantas vistas
+    # que las usan, pero la implementación ya se puede importar y probar sin
+    # levantar una aplicación Flask.
+    obtener_quests_usuario = metas_svc.obtener_quests_usuario
+    usuario_participa_en_quest = metas_svc.usuario_participa_en_quest
+    bloquear_quest = metas_svc.bloquear_quest
+
+    calcular_ingreso_mensual_usuario = analisis.calcular_ingreso_mensual_usuario
+    calcular_gasto_mensual_usuario = analisis.calcular_gasto_mensual_usuario
+    calcular_edad_usuario = analisis.calcular_edad_usuario
+    contar_metas_completadas_usuario = analisis.contar_metas_completadas_usuario
+    construir_questy_input = analisis.construir_questy_input
+    humanizar_segmento_questy = analisis.humanizar_segmento_questy
+    analizar_habitos_ahorro = analisis.analizar_habitos_ahorro
+    resumen_gastos_para_ia = analisis.resumen_gastos_para_ia
+    seleccionar_meta_prioritaria = analisis.seleccionar_meta_prioritaria
+    generar_resumen_questy_usuario = analisis.generar_resumen_questy_usuario
+    generar_consejos_financieros = analisis.generar_consejos_financieros
+    simular_escenario_ahorro = analisis.simular_escenario_ahorro
+    calcular_estadisticas = analisis.calcular_estadisticas
+    generar_notificaciones = analisis.generar_notificaciones
 
     # ----------------- Notificaciones inteligentes -----------------
 
-    def generar_notificaciones(usuario):
-        notificaciones = []
-        hoy = date.today()
-
-        quests = obtener_quests_usuario(usuario)
-
-        for q in quests:
-            dias_restantes = (q.fecha_limite - hoy).days
-            progreso = q.progreso_porcentaje()
-
-            # 1) Reto por vencer pronto
-            if 0 <= dias_restantes <= 7 and progreso < 80:
-                notificaciones.append({
-                    "tipo": "warning",
-                    "mensaje": f"Tu reto '{q.nombre}' está por vencer en {dias_restantes} día(s) y llevas {progreso}% de avance."
-                })
-
-            # 2) Reto vencido sin completar
-            if dias_restantes < 0 and progreso < 100:
-                notificaciones.append({
-                    "tipo": "danger",
-                    "mensaje": f"Tu reto '{q.nombre}' ya venció y no alcanzaste el monto objetivo."
-                })
-
-            # 3) Reto sin movimientos del usuario actual
-            ultimo_mov = (
-                Movimiento.query
-                .filter_by(quest_id=q.id, usuario_id=usuario.id)
-                .order_by(Movimiento.fecha.desc())
-                .first()
-            )
-
-            if ultimo_mov is None and progreso == 0:
-                notificaciones.append({
-                    "tipo": "info",
-                    "mensaje": f"Aún no has registrado tu primer ahorro en el reto '{q.nombre}'."
-                })
-            elif ultimo_mov is not None and progreso < 100:
-                dias_sin_mov = (datetime.utcnow() - ultimo_mov.fecha).days
-                if dias_sin_mov >= 7:
-                    notificaciones.append({
-                        "tipo": "info",
-                        "mensaje": f"Llevas {dias_sin_mov} día(s) sin registrar movimientos en '{q.nombre}'."
-                    })
-
-        # ----------------- Notificaciones basadas en gastos / control de gastos -----------------
-        # Solo generamos estas si el usuario tiene activadas las notificaciones de IA (si el campo existe)
-        notif_ia_activo = getattr(usuario, "notif_ia", True)
-
-        if notif_ia_activo:
-            try:
-                gastos_info = resumen_gastos_para_ia(usuario)
-            except Exception:
-                gastos_info = None
-
-            if gastos_info:
-                total_mes = gastos_info.get("total_mes", 0.0) or 0.0
-                categoria_top = gastos_info.get("categoria_top")
-                categoria_top_monto = gastos_info.get("categoria_top_monto", 0.0) or 0.0
-                total_hormiga = gastos_info.get("total_hormiga", 0.0) or 0.0
-                hormiga_count = gastos_info.get("hormiga_count", 0) or 0
-
-                # 4) Sin gastos registrados en el mes
-                if total_mes == 0:
-                    notificaciones.append({
-                        "tipo": "info",
-                        "mensaje": (
-                            "Aún no has registrado gastos en tu módulo de control de gastos este mes. "
-                            "Si empiezas a registrar tus consumos, Questy podrá ayudarte a detectar gastos hormiga."
-                        ),
-                    })
-                else:
-                    # 5) Una categoría domina tus gastos del mes
-                    if categoria_top and categoria_top_monto >= 0.5 * total_mes and total_mes >= 500:
-                        notificaciones.append({
-                            "tipo": "warning",
-                            "mensaje": (
-                                f"Este mes has gastado aproximadamente {categoria_top_monto:,.0f} MXN en '{categoria_top}', "
-                                "lo que representa la mayor parte de tus gastos. Revisa si todos esos gastos son realmente necesarios."
-                            ),
-                        })
-
-                    # 6) Muchos gastos hormiga
-                    if total_hormiga >= 200 and hormiga_count >= 3:
-                        notificaciones.append({
-                            "tipo": "info",
-                            "mensaje": (
-                                f"Llevas {hormiga_count} gasto(s) hormiga por un total de ~{total_hormiga:,.0f} MXN este mes. "
-                                "Si recortas aunque sea una parte y la conviertes en aportes a tus retos, podrías acelerar tus metas."
-                            ),
-                        })
-
-                    # 7) Gasto muy alto en el mes (alerta suave)
-                    # Umbral simple: si el usuario tiene metas activas y el gasto del mes supera el ahorro total del mes
-                    # se puede sugerir revisar prioridades.
-                    try:
-                        # Ahorro (aportes) de los últimos 30 días
-                        hoy_dt = datetime.utcnow()
-                        hace_30 = hoy_dt - timedelta(days=30)
-                        movs_30 = (
-                            Movimiento.query
-                            .filter(
-                                Movimiento.usuario_id == usuario.id,
-                                Movimiento.tipo == "aporte",
-                                Movimiento.fecha >= hace_30,
-                            )
-                            .all()
-                        )
-                        ahorro_30 = sum(m.monto for m in movs_30)
-                    except Exception:
-                        ahorro_30 = 0
-
-                    if total_mes > ahorro_30 and total_mes >= 1000 and ahorro_30 > 0:
-                        notificaciones.append({
-                            "tipo": "warning",
-                            "mensaje": (
-                                f"En este mes has gastado alrededor de {total_mes:,.0f} MXN, "
-                                f"mientras que has ahorrado cerca de {ahorro_30:,.0f} MXN. "
-                                "Quizá valga la pena revisar qué gastos podrías reducir para fortalecer tu ahorro."
-                            ),
-                        })
-
-        return notificaciones
-
     # ----------------- Dificultad automática -----------------
 
-    def calcular_dificultad(monto_objetivo, fecha_limite, fecha_creacion=None):
-        if fecha_creacion is None:
-            fecha_creacion = date.today()
-
-        if not monto_objetivo or monto_objetivo <= 0:
-            return "desconocida"
-
-        dias_plazo = (fecha_limite - fecha_creacion).days
-        if dias_plazo <= 0:
-            dias_plazo = 1
-
-        ahorro_por_dia = monto_objetivo / dias_plazo
-
-        if ahorro_por_dia < 50:
-            return "fácil"
-        elif ahorro_por_dia < 150:
-            return "media"
-        else:
-            return "difícil"
-
-    # ----------------- Puntos (fórmula tipo Apple Fitness) -----------------
-
-    def calcular_puntos_quest(monto_objetivo, fecha_limite, dificultad, tipo, fecha_creacion=None):
-        if fecha_creacion is None:
-            fecha_creacion = date.today()
-
-        if not monto_objetivo or monto_objetivo <= 0:
-            return 0
-
-        dias_plazo = (fecha_limite - fecha_creacion).days
-        if dias_plazo <= 0:
-            dias_plazo = 1
-
-        # 1) Score por monto
-        monto_seguro = max(monto_objetivo, 1)
-        score_monto = math.log10(monto_seguro) * 25
-
-        # 2) Score por plazo
-        score_plazo = (30 / dias_plazo) * 30
-        score_plazo = min(score_plazo, 60)
-
-        # 3) Score por dificultad
-        dificultad_txt = (dificultad or "").lower()
-        if "dificil" in dificultad_txt or "difícil" in dificultad_txt:
-            score_riesgo = 20
-        elif "media" in dificultad_txt:
-            score_riesgo = 10
-        else:
-            score_riesgo = 0
-
-        # 4) Extra por colaborativo
-        score_extra = 15 if tipo == "colaborativo" else 0
-
-        puntos = score_monto + score_plazo + score_riesgo + score_extra
-
-        return max(5, int(round(puntos)))
-
-    def otorgar_puntos_por_completado(quest, events=None):
-        """
-        Reparte los puntos del reto entre todos los participantes
-        (creador + colaboradores) cuando se completa, dispara insignias
-        y avisa si algún usuario sube de rango.
-        """
-        if quest.puntos_otorgados or quest.puntos_recompensa <= 0:
-            return
-
-        def notificar_subida_rango(usuario, puntos_ganados):
-            puntos_antes = int((getattr(usuario, "puntos_totales", 0) or 0) - puntos_ganados)
-            if puntos_antes < 0:
-                puntos_antes = 0
-
-            rango_antes = calcular_estado_rango_perfil(puntos_antes)
-            rango_despues = calcular_estado_rango_perfil(getattr(usuario, "puntos_totales", 0) or 0)
-
-            if rango_antes["current_key"] != rango_despues["current_key"]:
-                emitir_flash_subida_rango(rango_despues)
-                if events is not None:
-                    events.append({
-                        "type": "rank_up",
-                        "rank_key": rango_despues["current_key"],
-                        "rank_name": rango_despues["current_name"],
-                        "rank_color": rango_despues["current_color"],
-                        "rank_accent": rango_despues["current_accent"],
-                        "points": rango_despues["points"],
-                        "is_max_rank": rango_despues["is_max_rank"],
-                        "next_name": rango_despues.get("next_name"),
-                        "points_remaining": rango_despues.get("points_remaining", 0),
-                    })
-
-        participaciones = ParticipacionQuest.query.filter_by(quest_id=quest.id).all()
-
-        if not participaciones:
-            # Solo el creador
-            quest.usuario.puntos_totales += quest.puntos_recompensa
-            notificar_subida_rango(quest.usuario, quest.puntos_recompensa)
-            quest.puntos_otorgados = True
-            # Insignias para el creador
-            checar_insignias_por_evento(quest.usuario, "reto_completado", quest=quest, events=events)
-            return
-
-        num_participantes = len(participaciones)
-        puntos_por_usuario = max(1, int(round(quest.puntos_recompensa / num_participantes)))
-
-        for p in participaciones:
-            p.usuario.puntos_totales += puntos_por_usuario
-            notificar_subida_rango(p.usuario, puntos_por_usuario)
-            checar_insignias_por_evento(p.usuario, "reto_completado", quest=quest, events=events)
-
-        quest.puntos_otorgados = True
-
-    def analizar_habitos_ahorro(usuario):
-        """Calcula métricas por usuario y por reto:
-        - ritmo real de ahorro
-        - ritmo necesario para llegar
-        - probabilidad estimada de completar
-        - recomendaciones por reto
-        """
-        hoy = date.today()
-        quests = obtener_quests_usuario(usuario)
-
-        resumen_global = {
-            "total_quests": len(quests),
-            "activos": 0,
-            "completados": 0,
-            "cancelados": 0,
-        }
-
-        analisis_por_quest = []
-        recomendaciones = []
-
-        for q in quests:
-            if q.estatus == "cancelado":
-                resumen_global["cancelados"] += 1
-            elif q.estatus == "completado":
-                resumen_global["completados"] += 1
-            else:
-                resumen_global["activos"] += 1
-
-            dias_totales = (q.fecha_limite - q.fecha_creacion).days or 1
-            dias_transcurridos = (hoy - q.fecha_creacion).days
-            if dias_transcurridos <= 0:
-                dias_transcurridos = 1
-
-            ritmo_necesario = q.monto_objetivo / dias_totales
-            ritmo_real = q.monto_actual / dias_transcurridos
-
-            # Probabilidad estimada simple (0-100)
-            if ritmo_necesario <= 0:
-                prob = 0
-                nivel = "baja"
-            else:
-                ratio = ritmo_real / ritmo_necesario
-                if ratio >= 1.1:
-                    prob = 90
-                    nivel = "alta"
-                elif ratio >= 0.7:
-                    prob = 60
-                    nivel = "media"
-                else:
-                    prob = 30
-                    nivel = "baja"
-
-            faltante = max(q.monto_objetivo - q.monto_actual, 0)
-            dias_restantes = (q.fecha_limite - hoy).days
-            if dias_restantes <= 0:
-                ahorro_diario_recomendado = faltante if faltante > 0 else 0
-            else:
-                ahorro_diario_recomendado = faltante / dias_restantes
-
-            analisis_por_quest.append({
-                "quest": q,
-                "dias_totales": dias_totales,
-                "dias_transcurridos": dias_transcurridos,
-                "dias_restantes": dias_restantes,
-                "ritmo_necesario": ritmo_necesario,
-                "ritmo_real": ritmo_real,
-                "probabilidad_num": prob,
-                "probabilidad_nivel": nivel,
-                "faltante": faltante,
-                "ahorro_diario_recomendado": ahorro_diario_recomendado,
-            })
-
-            # Reglas simples de recomendación
-            if q.estatus not in ["completado", "cancelado"]:
-                if nivel == "baja" and dias_restantes > 0:
-                    recomendaciones.append({
-                        "tipo": "warning",
-                        "texto": (
-                            f"Tu reto '{q.nombre}' va por debajo del ritmo necesario. "
-                            f"Te convendría aportar ~{ahorro_diario_recomendado:,.0f} MXN diarios para alcanzarlo."
-                        ),
-                    })
-                if nivel == "alta" and dias_restantes > 0:
-                    recomendaciones.append({
-                        "tipo": "success",
-                        "texto": (
-                            f"Vas muy bien en '{q.nombre}'. Si mantienes tu ritmo, "
-                            f"es muy probable que alcances la meta."
-                        ),
-                    })
-                if dias_restantes <= 7 and faltante > 0:
-                    recomendaciones.append({
-                        "tipo": "danger",
-                        "texto": (
-                            f"A tu reto '{q.nombre}' le quedan pocos días y aún te faltan "
-                            f"{faltante:,.0f} MXN para lograrlo."
-                        ),
-                    })
-
-        return {
-            "resumen_global": resumen_global,
-            "analisis_por_quest": analisis_por_quest,
-            "recomendaciones": recomendaciones,
-        }
-
-    def resumen_gastos_para_ia(usuario):
-        """Resume los gastos del usuario para que Questy pueda dar mejores recomendaciones.
-
-        Devuelve métricas del mes actual y comparación contra el mes anterior.
-        """
-        hoy = date.today()
-        inicio_mes = hoy.replace(day=1)
-        fin_mes = hoy
-
-        ultimo_dia_mes_anterior = inicio_mes - timedelta(days=1)
-        inicio_mes_anterior = ultimo_dia_mes_anterior.replace(day=1)
-
-        gastos_mes = (
-            Gasto.query
-            .filter(
-                Gasto.usuario_id == usuario.id,
-                Gasto.fecha >= inicio_mes,
-                Gasto.fecha <= fin_mes,
-            )
-            .all()
-        )
-
-        gastos_mes_anterior = (
-            Gasto.query
-            .filter(
-                Gasto.usuario_id == usuario.id,
-                Gasto.fecha >= inicio_mes_anterior,
-                Gasto.fecha <= ultimo_dia_mes_anterior,
-            )
-            .all()
-        )
-
-        def acumular_metricas(gastos_lista):
-            total = 0.0
-            por_categoria = {}
-            total_hormiga = 0.0
-            hormiga_count = 0
-            for gasto in gastos_lista:
-                monto = float(gasto.monto or 0)
-                total += monto
-
-                try:
-                    cat_nombre = gasto.categoria.nombre if gasto.categoria else "Otros"
-                except AttributeError:
-                    cat_nombre = "Otros"
-
-                por_categoria[cat_nombre] = por_categoria.get(cat_nombre, 0.0) + monto
-
-                if getattr(gasto, "es_hormiga", False):
-                    total_hormiga += monto
-                    hormiga_count += 1
-
-            categoria_top = None
-            categoria_top_monto = 0.0
-            categoria_top_porcentaje = 0.0
-            top_3 = []
-
-            if por_categoria:
-                categoria_top, categoria_top_monto = max(por_categoria.items(), key=lambda x: x[1])
-                if total > 0:
-                    categoria_top_porcentaje = (categoria_top_monto / total) * 100
-                top_3 = sorted(
-                    [
-                        {
-                            "nombre": nombre,
-                            "monto": monto,
-                            "porcentaje": ((monto / total) * 100) if total > 0 else 0.0,
-                        }
-                        for nombre, monto in por_categoria.items()
-                    ],
-                    key=lambda x: x["monto"],
-                    reverse=True,
-                )[:3]
-
-            return {
-                "total": round(total, 2),
-                "por_categoria": por_categoria,
-                "categoria_top": categoria_top,
-                "categoria_top_monto": round(categoria_top_monto, 2),
-                "categoria_top_porcentaje": round(categoria_top_porcentaje, 2),
-                "top_3": top_3,
-                "total_hormiga": round(total_hormiga, 2),
-                "hormiga_count": hormiga_count,
-                "num_gastos": len(gastos_lista),
-            }
-
-        actual = acumular_metricas(gastos_mes)
-        anterior = acumular_metricas(gastos_mes_anterior)
-
-        total_mes = actual["total"]
-        total_mes_anterior = anterior["total"]
-
-        if total_mes_anterior > 0:
-            variacion_vs_mes_anterior = ((total_mes - total_mes_anterior) / total_mes_anterior) * 100
-        elif total_mes > 0:
-            variacion_vs_mes_anterior = 100.0
-        else:
-            variacion_vs_mes_anterior = 0.0
-
-        if variacion_vs_mes_anterior >= 10:
-            tendencia_gasto = "subiendo"
-        elif variacion_vs_mes_anterior <= -10:
-            tendencia_gasto = "bajando"
-        else:
-            tendencia_gasto = "estable"
-
-        dias_del_mes_transcurridos = max((fin_mes - inicio_mes).days + 1, 1)
-        promedio_diario = total_mes / dias_del_mes_transcurridos if dias_del_mes_transcurridos > 0 else 0.0
-
-        ingreso_estimado = calcular_ingreso_mensual_usuario(usuario)
-        porcentaje_ingreso_gastado = ((total_mes / ingreso_estimado) * 100) if ingreso_estimado > 0 else 0.0
-
-        # Margen redirigible conservador para recomendaciones:
-        # 30% de gasto hormiga + 15% de la categoría principal.
-        margen_redirigible = (actual["total_hormiga"] * 0.30) + (actual["categoria_top_monto"] * 0.15)
-        margen_redirigible = round(margen_redirigible, 2)
-
-        return {
-            "total_mes": total_mes,
-            "total_mes_anterior": total_mes_anterior,
-            "variacion_vs_mes_anterior": round(variacion_vs_mes_anterior, 2),
-            "tendencia_gasto": tendencia_gasto,
-            "promedio_diario": round(promedio_diario, 2),
-            "porcentaje_ingreso_gastado": round(porcentaje_ingreso_gastado, 2),
-            "margen_redirigible": margen_redirigible,
-            "por_categoria": actual["por_categoria"],
-            "categoria_top": actual["categoria_top"],
-            "categoria_top_monto": actual["categoria_top_monto"],
-            "categoria_top_porcentaje": actual["categoria_top_porcentaje"],
-            "top_3_categorias": actual["top_3"],
-            "total_hormiga": actual["total_hormiga"],
-            "hormiga_count": actual["hormiga_count"],
-            "num_gastos": actual["num_gastos"],
-        }
-
-    def calcular_ingreso_mensual_usuario(usuario):
-        """Estimación simple del ingreso mensual del usuario.
-
-        Prioridad:
-        1) Campo explícito en Usuario si existe.
-        2) Promedio mensual de aportes de los últimos 90 días.
-        3) 0 como fallback.
-        """
-        ingreso_campo = getattr(usuario, "ingreso_mensual", None)
-        if ingreso_campo is not None:
-            try:
-                ingreso_val = float(ingreso_campo)
-                if ingreso_val >= 0:
-                    return ingreso_val
-            except (TypeError, ValueError):
-                pass
-
-        hoy_dt = datetime.utcnow()
-        hace_90 = hoy_dt - timedelta(days=90)
-        movs_90 = (
-            Movimiento.query
-            .filter(
-                Movimiento.usuario_id == usuario.id,
-                Movimiento.tipo == "aporte",
-                Movimiento.fecha >= hace_90,
-            )
-            .all()
-        )
-        total_90 = sum(float(m.monto or 0) for m in movs_90)
-        if total_90 > 0:
-            return round(total_90 / 3, 2)
-
-        return 0.0
-
-    def calcular_gasto_mensual_usuario(usuario):
-        """Obtiene el gasto mensual actual del usuario usando el módulo de gastos."""
-        gastos_info = resumen_gastos_para_ia(usuario)
-        return round(float(gastos_info.get("total_mes", 0.0) or 0.0), 2)
-
-    def calcular_edad_usuario(usuario):
-        """Obtiene la edad del usuario si existe; usa 23 como fallback."""
-        edad_attr = getattr(usuario, "edad", None)
-        if edad_attr is not None:
-            try:
-                edad_val = int(edad_attr)
-                if 18 <= edad_val <= 29:
-                    return edad_val
-            except (TypeError, ValueError):
-                pass
-        return 23
-
-    def contar_metas_completadas_usuario(usuario):
-        """Cuenta las metas completadas donde el usuario participa."""
-        quests = obtener_quests_usuario(usuario)
-        return sum(1 for q in quests if q.estatus == "completado")
-
-    def construir_questy_input(usuario, quest):
-        """Construye el payload real para evaluar una meta con Questy."""
-        hoy = date.today()
-        dias_restantes = (quest.fecha_limite - hoy).days if quest.fecha_limite else 30
-        if dias_restantes <= 0:
-            dias_restantes = 1
-
-        participaciones = ParticipacionQuest.query.filter_by(quest_id=quest.id).count()
-        colaboradores = max(participaciones - 1, 0)
-
-        total_points_before = int(getattr(usuario, "puntos_totales", 0) or 0)
-        _estado_rango_perfil = calcular_estado_rango_perfil(total_points_before)
-        completed_goals = contar_metas_completadas_usuario(usuario)
-        age = calcular_edad_usuario(usuario)
-        monthly_income = calcular_ingreso_mensual_usuario(usuario)
-        monthly_expense = calcular_gasto_mensual_usuario(usuario)
-
-        return QuestyInput(
-            user_name=getattr(usuario, "nombre", "Usuario") or "Usuario",
-            age=age,
-            monthly_income=monthly_income,
-            monthly_expense=monthly_expense,
-            goal_name=quest.nombre,
-            goal_amount=float(quest.monto_objetivo or 0),
-            deadline_days=dias_restantes,
-            collaborators=colaboradores,
-            total_points_before=total_points_before,
-            current_saved_amount=float(quest.monto_actual or 0),
-            completed_goals=completed_goals,
-        )
-
-    def humanizar_segmento_questy(segmento):
-        """Convierte el segmento técnico en una etiqueta legible para UI."""
-        if not segmento:
-            return "Perfil joven"
-
-        partes = str(segmento).split("_")
-        if len(partes) < 3:
-            return "Perfil joven"
-
-        ingreso = partes[1]
-        presion = partes[2]
-
-        ingreso_map = {
-            "bajo": "ingreso bajo",
-            "medio": "ingreso medio",
-            "alto": "ingreso alto",
-        }
-
-        # contemplar segmentos como medio_bajo / medio_alto
-        if len(partes) >= 4 and partes[1] == "medio":
-            ingreso = f"medio_{partes[2]}"
-            presion = partes[3]
-
-        ingreso_map.update({
-            "medio_bajo": "ingreso medio-bajo",
-            "medio_alto": "ingreso medio-alto",
-        })
-
-        presion_map = {
-            "baja": "presión baja",
-            "media": "presión media",
-            "alta": "presión alta",
-            "sin_dato": "presión sin dato",
-        }
-
-        ingreso_txt = ingreso_map.get(ingreso, ingreso.replace("_", "-"))
-        presion_txt = presion_map.get(presion, presion.replace("_", " "))
-
-        return f"Jóvenes con {ingreso_txt} y {presion_txt}"
-
-    def seleccionar_meta_prioritaria(resultados_ia):
-        """Elige la meta activa que más urge por probabilidad y tiempo restante."""
-        activos = [
-            item for item in resultados_ia.get("analisis_por_quest", [])
-            if item["quest"].estatus not in ["completado", "cancelado"]
-        ]
-
-        if not activos:
-            return None
-
-        def prioridad(item):
-            prob = item.get("probabilidad_num", 0)
-            dias_restantes = item.get("dias_restantes", 9999)
-            faltante = item.get("faltante", 0)
-            return (prob, dias_restantes, -faltante)
-
-        return sorted(activos, key=prioridad)[0]
-
-    def generar_resumen_questy_usuario(usuario, resultados_ia, gastos_resumen, questy_panels):
-        """Genera un resumen general para la vista de Questy con lectura útil y accionable."""
-        resumen = resultados_ia.get("resumen_global", {})
-        meta_prioritaria = seleccionar_meta_prioritaria(resultados_ia)
-
-        metas_activas = resumen.get("activos", 0)
-        metas_completadas = resumen.get("completados", 0)
-        total_mes_gastos = float(gastos_resumen.get("total_mes", 0.0) or 0.0)
-        total_mes_anterior = float(gastos_resumen.get("total_mes_anterior", 0.0) or 0.0)
-        variacion_vs_mes_anterior = float(gastos_resumen.get("variacion_vs_mes_anterior", 0.0) or 0.0)
-        tendencia_gasto = gastos_resumen.get("tendencia_gasto", "estable")
-        promedio_diario = float(gastos_resumen.get("promedio_diario", 0.0) or 0.0)
-        porcentaje_ingreso_gastado = float(gastos_resumen.get("porcentaje_ingreso_gastado", 0.0) or 0.0)
-        margen_redirigible = float(gastos_resumen.get("margen_redirigible", 0.0) or 0.0)
-        categoria_top = gastos_resumen.get("categoria_top")
-        categoria_top_monto = float(gastos_resumen.get("categoria_top_monto", 0.0) or 0.0)
-        categoria_top_porcentaje = float(gastos_resumen.get("categoria_top_porcentaje", 0.0) or 0.0)
-        total_hormiga = float(gastos_resumen.get("total_hormiga", 0.0) or 0.0)
-        hormiga_count = int(gastos_resumen.get("hormiga_count", 0) or 0)
-
-        if metas_activas == 0:
-            respuesta_rapida = (
-                "Hoy no tienes metas activas. Un buen siguiente paso sería crear una meta pequeña "
-                "para que Questy pueda empezar a medir tu ritmo y darte recomendaciones más precisas."
-            )
-        else:
-            respuesta_rapida = (
-                f"Hoy veo {metas_activas} meta(s) activa(s) y {metas_completadas} completada(s). "
-                "Ya puedo darte una lectura más clara de tus prioridades y de cómo tus gastos afectan tu avance."
-            )
-
-        alerta_texto = None
-        if meta_prioritaria:
-            q = meta_prioritaria["quest"]
-            prob = meta_prioritaria.get("probabilidad_num", 0)
-            dias_restantes = meta_prioritaria.get("dias_restantes", 0)
-            faltante = meta_prioritaria.get("faltante", 0)
-            ahorro_diario = meta_prioritaria.get("ahorro_diario_recomendado", 0)
-
-            if prob <= 40:
-                alerta_texto = (
-                    f"La meta que más urge ahorita es '{q.nombre}': le quedan {dias_restantes} día(s), aún faltan "
-                    f"{faltante:,.0f} MXN y para mantener el ritmo ideal necesitarías cerca de {ahorro_diario:,.0f} MXN diarios."
-                )
-            elif total_mes_gastos > 0 and margen_redirigible > 0 and margen_redirigible >= ahorro_diario * 7:
-                alerta_texto = (
-                    f"Tu meta prioritaria sigue siendo '{q.nombre}'. La buena noticia es que tu patrón de gasto actual deja un margen potencial "
-                    f"de unos {margen_redirigible:,.0f} MXN que podrías redirigir sin tocar todo tu consumo."
-                )
-            else:
-                alerta_texto = (
-                    f"Tu meta con mayor prioridad actual es '{q.nombre}'. Todavía está en rango manejable, "
-                    "pero conviene no dejarla enfriarse."
-                )
-        elif metas_activas > 0:
-            alerta_texto = "Tus metas activas no muestran alertas críticas por ahora."
-
-        consejo_texto = None
-        if total_mes_gastos > 0 and categoria_top:
-            if categoria_top_porcentaje >= 35:
-                consejo_texto = (
-                    f"Tu gasto dominante este mes está en '{categoria_top}' con aproximadamente {categoria_top_monto:,.0f} MXN, "
-                    f"lo que representa cerca del {categoria_top_porcentaje:,.0f}% de tus gastos del mes. "
-                    "Ese rubro es el primer lugar donde Questy buscaría margen para empujar tu meta principal."
-                )
-            else:
-                consejo_texto = (
-                    f"Este mes llevas alrededor de {total_mes_gastos:,.0f} MXN en gastos, con un promedio diario de {promedio_diario:,.0f} MXN. "
-                    f"La categoría más fuerte por ahora es '{categoria_top}' con {categoria_top_monto:,.0f} MXN."
-                )
-        elif total_hormiga > 0:
-            consejo_texto = (
-                f"Llevas alrededor de {total_hormiga:,.0f} MXN en {hormiga_count} gasto(s) hormiga este mes. "
-                "Incluso una parte de esa fuga podría convertirse en progreso real para tus metas."
-            )
-        else:
-            consejo_texto = (
-                "Aún necesito más gastos registrados para detectar patrones finos, pero ya puedo ayudarte con el ritmo de tus metas."
-            )
-
-        if total_mes_anterior > 0:
-            consejo_texto += (
-                f" Frente al mes anterior, tu gasto va {tendencia_gasto} ({variacion_vs_mes_anterior:+.0f}%)."
-            )
-
-        accion_texto = None
-        if meta_prioritaria:
-            q = meta_prioritaria["quest"]
-            ahorro_diario = meta_prioritaria.get("ahorro_diario_recomendado", 0)
-            ahorro_semanal = ahorro_diario * 7
-            if margen_redirigible > 0:
-                accion_texto = (
-                    f"Si quieres mejorar tu posición ahora mismo, enfócate en '{q.nombre}'. "
-                    f"Tu meta pide cerca de {ahorro_diario:,.0f} MXN diarios ({ahorro_semanal:,.0f} por semana) y hoy Questy estima un margen redirigible de unos {margen_redirigible:,.0f} MXN."
-                )
-            else:
-                accion_texto = (
-                    f"Si quieres mejorar tu posición ahora mismo, enfócate en '{q.nombre}' y apunta a unos {ahorro_diario:,.0f} MXN diarios "
-                    "mientras siga abierta."
-                )
-        elif metas_activas == 0:
-            accion_texto = "Tu mejor siguiente movimiento es crear una meta para que Questy empiece a acompañar tu progreso."
-        else:
-            accion_texto = "Tu mejor siguiente movimiento es mantener constancia con tus aportes esta semana."
-
-        metas_resumen = []
-        for panel in questy_panels[:4]:
-            quest = panel["quest"]
-            result = panel["result"]
-            esfuerzo_mensual = float(result.get("monthly_goal_effort", 0.0) or 0.0)
-            puntos_finales = result.get("puntos_finales", quest.puntos_recompensa or 0)
-
-            if margen_redirigible > 0 and esfuerzo_mensual > 0:
-                if margen_redirigible >= esfuerzo_mensual:
-                    lectura_extra = "Tu gasto actual deja un margen que podría cubrir por sí solo el esfuerzo mensual estimado."
-                elif margen_redirigible >= (esfuerzo_mensual * 0.5):
-                    lectura_extra = "Tu patrón de gasto deja un margen parcial que sí podría acelerar esta meta si lo rediriges."
-                else:
-                    lectura_extra = "Esta meta depende más de constancia en aportes que de recortar gasto reciente."
-            else:
-                lectura_extra = "Aún necesito más gasto registrado para cruzar esta meta con un patrón de consumo sólido."
-
-            metas_resumen.append({
-                "id": quest.id,
-                "nombre": quest.nombre,
-                "puntos_finales": puntos_finales,
-                "dificultad": result.get("dificultad_label", "equilibrada"),
-                "segmento_legible": panel.get("segmento_legible", humanizar_segmento_questy(result.get("segmento"))),
-                "mensaje": result.get("questy_message"),
-                "avance": round(float(quest.progreso_porcentaje()), 1),
-                "lectura_gasto": lectura_extra,
-                "esfuerzo_mensual": round(esfuerzo_mensual, 2),
-            })
-
-        return {
-            "respuesta_rapida": respuesta_rapida,
-            "alerta_texto": alerta_texto,
-            "consejo_texto": consejo_texto,
-            "accion_texto": accion_texto,
-            "metas_resumen": metas_resumen,
-            "meta_prioritaria": meta_prioritaria["quest"] if meta_prioritaria else None,
-            "tendencia_gasto": tendencia_gasto,
-            "variacion_vs_mes_anterior": variacion_vs_mes_anterior,
-            "margen_redirigible": margen_redirigible,
-            "porcentaje_ingreso_gastado": porcentaje_ingreso_gastado,
-        }
-
-    def generar_consejos_financieros(usuario, resultados_ia):
-        """Genera una lista de consejos financieros personalizados usando el análisis de IA y movimientos recientes."""
-        resumen = resultados_ia["resumen_global"]
-        analisis = resultados_ia["analisis_por_quest"]
-
-        consejos = []
-
-        # 1) Si no tiene metas activas
-        if resumen["activos"] == 0:
-            consejos.append({
-                "tipo": "info",
-                "titulo": "Sin metas activas",
-                "texto": (
-                    "Actualmente no tienes metas activas. Te convendría crear al menos una meta de ahorro, "
-                    "por ejemplo un fondo de emergencia o una meta a corto plazo."
-                ),
-            })
-
-        # 2) Si tiene varias metas canceladas
-        if resumen["cancelados"] >= 2:
-            consejos.append({
-                "tipo": "warning",
-                "titulo": "Metas canceladas",
-                "texto": (
-                    "Has cancelado varias metas. Tal vez estás fijando montos o fechas demasiado exigentes. "
-                    "Considera metas más pequeñas o plazos un poco más largos."
-                ),
-            })
-
-        # 3) Consejos por cada reto activo según probabilidad y ritmo
-        for item in analisis:
-            q = item["quest"]
-            if q.estatus in ["completado", "cancelado"]:
-                continue
-
-            prob = item["probabilidad_num"]
-            faltante = item["faltante"]
-            dias_restantes = item["dias_restantes"]
-            ahorro_diario = item["ahorro_diario_recomendado"]
-
-            if prob <= 40 and dias_restantes > 0 and faltante > 0:
-                consejos.append({
-                    "tipo": "danger",
-                    "titulo": f"Meta en riesgo: {q.nombre}",
-                    "texto": (
-                        f"Tu meta '{q.nombre}' tiene una probabilidad baja de cumplirse con tu ritmo actual. "
-                        f"Te faltan aproximadamente {faltante:,.0f} MXN y te convendría ahorrar unos "
-                        f"{ahorro_diario:,.0f} MXN diarios para alcanzarla a tiempo."
-                    ),
-                })
-            elif 40 < prob < 80 and dias_restantes > 0 and faltante > 0:
-                consejos.append({
-                    "tipo": "warning",
-                    "titulo": f"Puedes mejorar en: {q.nombre}",
-                    "texto": (
-                        f"Vas a medio camino con '{q.nombre}'. Si aumentas un poco tus depósitos y ahorras alrededor de "
-                        f"{ahorro_diario:,.0f} MXN al día, tus probabilidades de éxito aumentarán bastante."
-                    ),
-                })
-            elif prob >= 80 and faltante > 0:
-                consejos.append({
-                    "tipo": "success",
-                    "titulo": f"Vas muy bien en: {q.nombre}",
-                    "texto": (
-                        f"Tu meta '{q.nombre}' va muy bien encaminada. Si mantienes tu ritmo actual, es muy probable que la cumplas. "
-                        "No bajes la guardia y sigue registrando tus avances."
-                    ),
-                })
-
-        # 4) Consejo basado en movimientos de los últimos 30 días
-        hoy = datetime.utcnow()
-        hace_30 = hoy - timedelta(days=30)
-
-        movimientos_recientes = (
-            Movimiento.query
-            .filter(
-                Movimiento.usuario_id == usuario.id,
-                Movimiento.fecha >= hace_30,
-                Movimiento.tipo == "aporte",
-            )
-            .all()
-        )
-
-        total_30_dias = sum(m.monto for m in movimientos_recientes)
-        if movimientos_recientes:
-            ahorro_diario_promedio = total_30_dias / 30
-            consejos.append({
-                "tipo": "info",
-                "titulo": "Tu ritmo de ahorro reciente",
-                "texto": (
-                    f"En los últimos 30 días has ahorrado aproximadamente {total_30_dias:,.0f} MXN "
-                    f"(unos {ahorro_diario_promedio:,.0f} MXN diarios en promedio). "
-                    "Puedes usar este dato para definir metas más realistas y sostenibles."
-                ),
-            })
-        else:
-            consejos.append({
-                "tipo": "info",
-                "titulo": "Aún no has registrado ahorros recientes",
-                "texto": (
-                    "No has registrado aportes en los últimos 30 días. Intenta comenzar con un pequeño hábito, "
-                    "aunque sea una cantidad pequeña pero constante."
-                ),
-            })
-
-        return consejos
-
-    def simular_escenario_ahorro(usuario, quest, monto_extra, frecuencia):
-        """
-        Simula un escenario de ahorro extra para un quest concreto.
-        Calcula si con un monto adicional y una frecuencia dada se alcanzaría la meta,
-        y cómo cambiaría la probabilidad de éxito.
-        """
-        hoy = date.today()
-        dias_restantes = (quest.fecha_limite - hoy).days
-        if dias_restantes < 0:
-            dias_restantes = 0
-
-        # Cálculo de ritmo actual vs necesario
-        dias_totales = (quest.fecha_limite - quest.fecha_creacion).days or 1
-        dias_transcurridos = (hoy - quest.fecha_creacion).days
-        if dias_transcurridos <= 0:
-            dias_transcurridos = 1
-
-        ritmo_necesario = quest.monto_objetivo / dias_totales
-        ritmo_real = quest.monto_actual / dias_transcurridos
-
-        # Extra de ahorro convertido a "por día" según frecuencia
-        frecuencia = (frecuencia or "diario").lower()
-        if frecuencia == "diario":
-            extra_diario = monto_extra
-        elif frecuencia == "semanal":
-            extra_diario = monto_extra / 7.0
-        elif frecuencia == "quincenal":
-            extra_diario = monto_extra / 15.0
-        elif frecuencia == "mensual":
-            extra_diario = monto_extra / 30.0
-        else:
-            extra_diario = 0.0
-
-        aportes_proyectados = extra_diario * dias_restantes
-        total_proyectado = quest.monto_actual + aportes_proyectados
-        if total_proyectado > quest.monto_objetivo:
-            total_proyectado = quest.monto_objetivo
-
-        faltante = max(quest.monto_objetivo - total_proyectado, 0)
-
-        # Probabilidad actual (misma lógica que en analizar_habitos_ahorro)
-        if ritmo_necesario <= 0:
-            prob_actual = 0
-            nivel_actual = "baja"
-        else:
-            ratio_actual = ritmo_real / ritmo_necesario
-            if ratio_actual >= 1.1:
-                prob_actual = 90
-                nivel_actual = "alta"
-            elif ratio_actual >= 0.7:
-                prob_actual = 60
-                nivel_actual = "media"
-            else:
-                prob_actual = 30
-                nivel_actual = "baja"
-
-        # Probabilidad en el escenario con extra_diario
-        ritmo_escenario = ritmo_real + extra_diario
-        if ritmo_necesario <= 0:
-            prob_escenario = prob_actual
-            nivel_escenario = nivel_actual
-        else:
-            ratio_esc = ritmo_escenario / ritmo_necesario
-            if ratio_esc >= 1.1:
-                prob_escenario = 90
-                nivel_escenario = "alta"
-            elif ratio_esc >= 0.7:
-                prob_escenario = 60
-                nivel_escenario = "media"
-            else:
-                prob_escenario = 30
-                nivel_escenario = "baja"
-
-        alcanza_meta = total_proyectado >= quest.monto_objetivo
-
-        return {
-            "quest": quest,
-            "dias_restantes": dias_restantes,
-            "extra_diario": extra_diario,
-            "aportes_proyectados": aportes_proyectados,
-            "total_proyectado": total_proyectado,
-            "faltante": faltante,
-            "alcanza_meta": alcanza_meta,
-            "prob_actual": prob_actual,
-            "prob_escenario": prob_escenario,
-            "nivel_actual": nivel_actual,
-            "nivel_escenario": nivel_escenario,
-            "frecuencia": frecuencia,
-            "monto_extra": monto_extra,
-        }
-
-    def calcular_estadisticas(usuario):
-        """Calcula datos agregados para las gráficas de estadísticas de ahorro."""
-        hoy = date.today()
-        hace_30 = hoy - timedelta(days=30)
-
-        # Aportes de los últimos 30 días
-        movs_30 = (
-            Movimiento.query
-            .filter(
-                Movimiento.usuario_id == usuario.id,
-                Movimiento.tipo == "aporte",
-                Movimiento.fecha >= hace_30,
-            )
-            .order_by(Movimiento.fecha.asc())
-            .all()
-        )
-
-        aportes_por_dia = {}
-        for m in movs_30:
-            dia = m.fecha.date().isoformat()
-            aportes_por_dia[dia] = aportes_por_dia.get(dia, 0) + m.monto
-
-        labels_fechas = list(aportes_por_dia.keys())
-        data_montos = list(aportes_por_dia.values())
-
-        # Ahorro total por meta (todas las metas, todo el historial)
-        movs_todos = (
-            Movimiento.query
-            .filter(
-                Movimiento.usuario_id == usuario.id,
-                Movimiento.tipo == "aporte",
-            ).all()
-        )
-
-        total_ahorrado = sum(m.monto for m in movs_todos)
-        num_aportes = len(movs_todos)
-
-        ahorro_por_quest = {}
-        for m in movs_todos:
-            q = m.quest
-            if not q:
-                continue
-            ahorro_por_quest[q.nombre] = ahorro_por_quest.get(q.nombre, 0) + m.monto
-
-        labels_quests = list(ahorro_por_quest.keys())
-        data_quests = list(ahorro_por_quest.values())
-
-        meta_top_nombre = None
-        meta_top_monto = 0
-        if ahorro_por_quest:
-            meta_top_nombre, meta_top_monto = max(ahorro_por_quest.items(), key=lambda x: x[1])
-
-        # Resumen de metas
-        quests = obtener_quests_usuario(usuario)
-        activos = sum(1 for q in quests if q.estatus not in ["completado", "cancelado"])
-        completados = sum(1 for q in quests if q.estatus == "completado")
-
-        resumen = {
-            "total_ahorrado": total_ahorrado,
-            "num_aportes": num_aportes,
-            "meta_top_nombre": meta_top_nombre,
-            "meta_top_monto": meta_top_monto,
-            "metas_activas": activos,
-            "metas_completadas": completados,
-        }
-
-        return {
-            "resumen": resumen,
-            "serie_30_dias": {
-                "labels": labels_fechas,
-                "data": data_montos,
-            },
-            "serie_por_meta": {
-                "labels": labels_quests,
-                "data": data_quests,
-            },
-        }
-
-
-
+    calcular_dificultad = puntos_svc.dificultad
+    calcular_puntos_quest = puntos_svc.puntos_de_meta
 
     # ----------------- Rachas de ahorro: días consecutivos con aportes -----------------
-    def calcular_rachas_usuario(usuario):
-        """
-        Calcula la racha actual de días con aportes y la mejor racha histórica
-        para un usuario, usando únicamente movimientos de tipo 'aporte'.
-        La racha se mide en días consecutivos con al menos un aporte.
-        """
-        # Obtener todos los aportes del usuario ordenados por fecha ascendente
-        movs = (
-            Movimiento.query
-            .filter(
-                Movimiento.usuario_id == usuario.id,
-                Movimiento.tipo == "aporte",
-            )
-            .order_by(Movimiento.fecha.asc())
-            .all()
-        )
-
-        if not movs:
-            return {
-                "racha_actual": 0,
-                "mejor_racha": 0,
-                "ultimo_dia": None,
-            }
-
-        # Usar solo la parte de fecha (sin horas) y evitar días duplicados
-        dias_unicos = sorted({m.fecha.date() for m in movs})
-
-        racha_actual = 0
-        mejor_racha = 0
-        ultimo_dia = None
-
-        for d in dias_unicos:
-            if ultimo_dia is None:
-                # Primer día con aporte
-                racha_actual = 1
-            else:
-                diferencia = (d - ultimo_dia).days
-                if diferencia == 1:
-                    # Día inmediatamente siguiente: se extiende la racha
-                    racha_actual += 1
-                elif diferencia > 1:
-                    # Hubo un corte de al menos un día sin aporte: racha nueva
-                    racha_actual = 1
-                # Si diferencia == 0 no debería ocurrir porque usamos set(), pero lo ignoramos
-
-            if racha_actual > mejor_racha:
-                mejor_racha = racha_actual
-
-            ultimo_dia = d
-
-        # La racha actual es la racha del último bloque de días consecutivos;
-        # mejor_racha es el máximo histórico.
-        return {
-            "racha_actual": racha_actual,
-            "mejor_racha": mejor_racha,
-            "ultimo_dia": ultimo_dia,
-        }
-
-
-    def otorgar_bonus_racha(usuario, rachas_antes, rachas_despues, events=None):
-        """
-        Asigna puntos extra cuando el usuario alcanza nuevas rachas de días consecutivos
-        ahorrando. Solo se otorga bonus cuando la racha actual cruza ciertos umbrales.
-
-        Si se pasa `events` (lista), se le agrega un dict estructurado por cada bonus
-        otorgado, además del flash() de siempre — así los consumidores de la API JSON
-        pueden devolver el evento sin depender del sistema de flash (session/HTML).
-        """
-        if not rachas_antes or not rachas_despues:
-            return
-
-        racha_antes = rachas_antes.get("racha_actual", 0) or 0
-        racha_despues = rachas_despues.get("racha_actual", 0) or 0
-
-        # Si la racha no aumentó, no hay bonus
-        if racha_despues <= racha_antes:
-            return
-
-        # Umbrales de racha y puntos asociados
-        thresholds = [
-            (3, 15),
-            (7, 40),
-            (14, 80),
-            (30, 200),
-        ]
-
-        for limite, puntos in thresholds:
-            # Se otorga el bonus si se cruza el umbral (por ejemplo, de 2 a 3,
-            # o de 6 a 7, etc.). Si ya se tenía una racha mayor en el pasado,
-            # no importa: se volverá a recompensar solo al cruzar de nuevo el límite.
-            if racha_antes < limite <= racha_despues:
-                usuario.puntos_totales += puntos
-                emitir_flash_logro(
-                    titulo="Racha desbloqueada",
-                    mensaje=f"🔥 Alcanzaste {limite} días seguidos ahorrando y ganaste +{puntos} puntos QuestCash.",
-                    extra={
-                        "streak_days": limite,
-                        "points_bonus": puntos,
-                    },
-                )
-                if events is not None:
-                    events.append({
-                        "type": "streak_bonus",
-                        "streak_days": limite,
-                        "points_bonus": puntos,
-                    })
-
+    calcular_rachas_usuario = rachas.calcular_de_usuario
 
     def otorgar_insignia(codigo, usuario, events=None):
-        """Otorga una insignia al usuario si no la tenía ya."""
-        insignia = Insignia.query.filter_by(codigo=codigo).first()
-        if not insignia:
-            return
-
-        ya = UsuarioInsignia.query.filter_by(
-            usuario_id=usuario.id,
-            insignia_id=insignia.id
-        ).first()
-
-        if ya:
-            return
-
-        nueva = UsuarioInsignia(
-            usuario_id=usuario.id,
-            insignia_id=insignia.id,
+        """Delega en services/insignias. El aviso emergente es un efecto de la
+        web, así que entra por callback y no ensucia el servicio."""
+        def avisar(insignia):
+            emitir_flash_logro(
+                titulo="Logro desbloqueado",
+                mensaje=insignia.nombre,
+                extra={
+                    "rareza": insignia.rareza,
+                    "icono": insignia.icono,
+                    "codigo": insignia.codigo,
+                    "descripcion": insignia.descripcion,
+                },
+            )
+        return insignias_svc.otorgar(
+            codigo, usuario, events=events,
+            al_otorgar=avisar, crear_notificacion=crear_notificacion,
         )
-        db.session.add(nueva)
-        # Sin commit aquí; se hará en la vista que llama
-        emitir_flash_logro(
-            titulo="Logro desbloqueado",
-            mensaje=f"{insignia.nombre}",
-            extra={
-                "rareza": insignia.rareza,
-                "icono": insignia.icono,
-                "codigo": insignia.codigo,
-                "descripcion": insignia.descripcion,
-            },
-        )
-        if events is not None:
-            events.append({
-                "type": "insignia",
-                "codigo": insignia.codigo,
-                "nombre": insignia.nombre,
-                "descripcion": insignia.descripcion,
-                "rareza": insignia.rareza,
-                "icono": insignia.icono,
-            })
 
     def checar_insignias_por_evento(usuario, evento, quest=None, events=None):
-        """Evalúa y otorga insignias según un evento usando los códigos nuevos."""
-
-        # 1) Primer ahorro registrado
-        if evento == "primer_movimiento":
-            total_movs = Movimiento.query.filter_by(usuario_id=usuario.id, tipo="aporte").count()
-            if total_movs == 1:
-                otorgar_insignia("PRIMER_AHORRO", usuario, events=events)
-
-            # Insignia de ahorro total de $1000 o más
-            total_ahorrado = (
-                db.session.query(db.func.sum(Movimiento.monto))
-                .filter_by(usuario_id=usuario.id, tipo="aporte")
-                .scalar() or 0
+        def avisar(insignia):
+            emitir_flash_logro(
+                titulo="Logro desbloqueado",
+                mensaje=insignia.nombre,
+                extra={
+                    "rareza": insignia.rareza,
+                    "icono": insignia.icono,
+                    "codigo": insignia.codigo,
+                    "descripcion": insignia.descripcion,
+                },
             )
-            if total_ahorrado >= 1000:
-                otorgar_insignia("AHORRO_1000", usuario, events=events)
-
-        # 2) Primera meta creada
-        elif evento == "primer_reto_creado":
-            total_quests = Quest.query.filter_by(usuario_id=usuario.id).count()
-            if total_quests == 1:
-                otorgar_insignia("PRIMERA_META", usuario, events=events)
-
-        # 3) Primer reto completado
-        elif evento == "reto_completado" and quest is not None:
-            # Siempre otorgar la épica
-            otorgar_insignia("PRIMER_RETO", usuario, events=events)
-
-            # Meta cumplida a tiempo (antes o justo en fecha límite)
-            if quest.fecha_limite and quest.monto_actual >= quest.monto_objetivo:
-                hoy = date.today()
-                if hoy <= quest.fecha_limite:
-                    otorgar_insignia("META_A_TIEMPO", usuario, events=events)
-
-    def procesar_registro_movimiento(usuario, quest, tipo, monto_float, nota, categoria, events=None):
-        """Registra un movimiento (aporte/retiro) sobre una meta: crea el Movimiento,
-        actualiza monto/estatus de la meta, recalcula la recompensa vía IA (con
-        fallback) y dispara premios (puntos, insignias, racha).
-
-        Comparte la lógica antes duplicada entre `nuevo_movimiento` y su alias
-        `crear_movimiento`, y la reutiliza también la API JSON. No hace commit;
-        el caller es responsable de eso.
-        """
-        rachas_antes = calcular_rachas_usuario(usuario)
-
-        movimiento = Movimiento(
-            tipo=tipo,
-            monto=monto_float,
-            nota=nota,
-            categoria=categoria,
-            usuario_id=usuario.id,
-            quest_id=quest.id,
+        return insignias_svc.revisar_evento(
+            usuario, evento, quest=quest, events=events,
+            al_otorgar=avisar, crear_notificacion=crear_notificacion,
         )
-        db.session.add(movimiento)
-
-        if tipo == "aporte":
-            quest.monto_actual += monto_float
-        else:
-            quest.monto_actual -= monto_float
-
-        # Recalcular la recompensa contextual del reto antes de evaluar si se completa.
-        # Así, los puntos que se muestran y los que realmente se otorgan salen de la misma fuente.
-        try:
-            questy_input = construir_questy_input(usuario, quest)
-            questy_result = evaluate_quest(questy_input)
-            quest.puntos_recompensa = int(questy_result.puntos_finales or 0)
-        except Exception:
-            pass
-
-        # Actualizar estatus automáticamente
-        if quest.monto_actual >= quest.monto_objetivo and quest.estatus != "cancelado":
-            quest.monto_actual = quest.monto_objetivo
-            if quest.estatus != "completado":
-                quest.estatus = "completado"
-                otorgar_puntos_por_completado(quest, events=events)
-        elif quest.monto_actual > 0 and quest.estatus == "pendiente":
-            quest.estatus = "en_progreso"
-
-        # Insignia por primer movimiento (si aplica)
-        checar_insignias_por_evento(usuario, "primer_movimiento", events=events)
-
-        # Bonus por racha solo para aportes
-        if tipo == "aporte":
-            # Asegurar que el movimiento actual esté en la sesión al recalcular
-            db.session.flush()
-            rachas_despues = calcular_rachas_usuario(usuario)
-            otorgar_bonus_racha(usuario, rachas_antes, rachas_despues, events=events)
-
-        return movimiento
 
     # ----------------- Rutas de autenticación -----------------
 
@@ -1640,9 +420,10 @@ def create_app():
 
             nuevo_usuario = Usuario(
                 nombre=nombre,
-                correo=correo,
-                password_hash=generate_password_hash(password),
+                password_hash=hashear_password(password),
             )
+            # set_correo cifra el correo y calcula su índice ciego.
+            nuevo_usuario.set_correo(correo)
             db.session.add(nuevo_usuario)
             db.session.commit()
 
@@ -1657,56 +438,361 @@ def create_app():
             correo = request.form.get("correo", "").strip().lower()
             password = request.form.get("password", "")
 
-            # Clave para controlar intentos por correo + IP
             ip = request.remote_addr or "unknown"
-            clave_intento = f"{correo}|{ip}"
 
-            ahora = datetime.utcnow()
-            datos_intento = intentos_login.get(clave_intento)
-
-            # Verificar si está bloqueado temporalmente
-            if datos_intento and datos_intento.get("bloqueado_hasta") and ahora < datos_intento["bloqueado_hasta"]:
-                minutos_restantes = int((datos_intento["bloqueado_hasta"] - ahora).total_seconds() // 60) + 1
+            bloqueo = rate_limit.segundos_de_bloqueo(correo, ip)
+            if bloqueo:
+                minutos_restantes = bloqueo // 60 + 1
                 flash(
                     f"Has excedido el número de intentos. Intenta de nuevo en aproximadamente {minutos_restantes} minuto(s).",
                     "danger",
                 )
                 return render_template("auth/login.html")
 
-            usuario = Usuario.query.filter_by(correo=correo).first()
+            usuario = Usuario.por_correo(correo)
 
-            if usuario and check_password_hash(usuario.password_hash, password):
-                # Login exitoso: limpiar intentos fallidos
-                intentos_login.pop(clave_intento, None)
+            if usuario and verificar_password(usuario.password_hash, password):
+                # Login exitoso: se olvida todo lo anterior
+                rate_limit.registrar_exito(correo, ip)
+
+                # Si la cuenta traía un hash con parámetros antiguos, este es
+                # el único momento en que existe la contraseña en claro:
+                # se aprovecha para regenerarlo con la política vigente.
+                if necesita_rehash(usuario.password_hash):
+                    usuario.password_hash = hashear_password(password)
+                    db.session.commit()
 
                 session.clear()
                 session["user_id"] = usuario.id
                 flash(f"¡Bienvenido de nuevo, {usuario.nombre}!", "success")
                 return redirect(url_for("dashboard"))
             else:
-                # Login fallido: incrementar contador
-                if not datos_intento:
-                    datos_intento = {"intentos": 0, "bloqueado_hasta": None}
-
-                datos_intento["intentos"] += 1
-
-                if datos_intento["intentos"] >= MAX_LOGIN_INTENTOS:
-                    datos_intento["bloqueado_hasta"] = ahora + timedelta(minutes=BLOQUEO_MINUTOS)
+                faltan, bloqueado = rate_limit.registrar_fallo(correo, ip)
+                if bloqueado:
                     flash(
                         "Demasiados intentos fallidos. Tu acceso se ha bloqueado temporalmente por unos minutos.",
                         "danger",
                     )
                 else:
-                    faltan = MAX_LOGIN_INTENTOS - datos_intento["intentos"]
                     flash(
                         f"Correo o contraseña incorrectos. Intentos restantes antes de bloqueo: {faltan}.",
                         "danger",
                     )
-
-                intentos_login[clave_intento] = datos_intento
                 return render_template("auth/login.html")
 
         return render_template("auth/login.html")
+
+    def eliminar_cuenta(usuario):
+        """Borra la cuenta y todo lo que cuelga de ella, en orden.
+
+        El borrado es real, no una marca de baja: es el derecho de cancelación,
+        y una cuenta "dada de baja" que conserva los datos no lo satisface.
+
+        El orden importa porque las cascadas del modelo colgaban de Quest, no
+        de Usuario: borrar el usuario sin más habría dejado movimientos, gastos
+        y notificaciones apuntando a un id inexistente.
+
+        Las metas COLABORATIVAS de las que esta persona no es creadora NO se
+        borran, y sus aportes tampoco: son movimientos de una meta que sigue
+        viva y de la que otras personas dependen. Borrarlos descuadraría el
+        saldo de terceros que no han pedido nada. Lo que se elimina es su
+        participación y su vínculo con esos movimientos, reasignándolos a la
+        meta en vez de a la persona.
+        """
+        # 1. Sesiones, tokens y claves de idempotencia: sin valor tras el borrado.
+        Sesion.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+        TokenCorreo.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+        ClaveIdempotencia.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+
+        # 2. Invitaciones que envió y las que le enviaron a él.
+        InvitacionQuest.query.filter_by(invitado_por_id=usuario.id).delete(synchronize_session=False)
+        if usuario.correo_bi:
+            InvitacionQuest.query.filter_by(correo_bi=usuario.correo_bi).delete(synchronize_session=False)
+
+        # 3. Notificaciones, insignias y gastos: solo suyos, se van con él.
+        Notificacion.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+        UsuarioInsignia.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+        Gasto.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+
+        # 4. Metas propias: al borrarlas caen en cascada sus movimientos y
+        #    participaciones, incluidos los aportes de otros colaboradores.
+        propias = Quest.query.filter_by(usuario_id=usuario.id).all()
+        ids_propias = {q.id for q in propias}
+        for quest in propias:
+            db.session.delete(quest)
+
+        # 5. Movimientos en metas AJENAS: se DESLIGAN, no se borran.
+        #
+        #    Borrarlos dejaría la meta compartida con un monto_actual que ya no
+        #    cuadra con su historial de movimientos, y reduciría el progreso de
+        #    personas que no han pedido nada. Poner usuario_id a NULL cumple el
+        #    derecho de cancelación —el aporte deja de ser atribuible a nadie—
+        #    sin descuadrar a terceros.
+        consulta = Movimiento.query.filter(Movimiento.usuario_id == usuario.id)
+        if ids_propias:
+            consulta = consulta.filter(~Movimiento.quest_id.in_(ids_propias))
+        consulta.update({"usuario_id": None}, synchronize_session=False)
+
+        # 6. Participaciones en metas ajenas.
+        ParticipacionQuest.query.filter_by(usuario_id=usuario.id).delete(synchronize_session=False)
+
+        db.session.delete(usuario)
+
+    def _url_app():
+        """Base pública para los enlaces que van por correo.
+
+        No se usa request.url_root: un enlace de recuperación construido con el
+        Host que mandó el cliente permite envenenarlo apuntando a otro sitio.
+        Se toma de la configuración del despliegue.
+        """
+        return os.environ.get("APP_URL", request.url_root).rstrip("/")
+
+    @app.route("/recuperar", methods=["GET", "POST"])
+    def recuperar_password():
+        """Pide un enlace de recuperación.
+
+        Responde SIEMPRE lo mismo, exista o no la cuenta. Antes no había forma
+        de recuperar una contraseña: quien la olvidaba perdía la cuenta y todo
+        su historial.
+        """
+        if request.method == "POST":
+            correo_usuario = request.form.get("correo", "").strip().lower()
+            ip = request.remote_addr or "unknown"
+
+            # Limita el envío por correo+IP para que esto no sirva de
+            # ametralladora de mensajes contra una dirección ajena.
+            bloqueo = rate_limit.segundos_de_bloqueo(f"recuperar:{correo_usuario}", ip)
+            if not bloqueo:
+                usuario = Usuario.por_correo(correo_usuario)
+                if usuario is not None:
+                    crudo = tokens_correo.emitir(usuario, ip=ip)
+                    db.session.commit()
+                    enlace = f"{_url_app()}/recuperar/{crudo}"
+                    correo_mod.enviar_recuperacion(
+                        correo_usuario, enlace, tokens_correo.MINUTOS_VALIDEZ
+                    )
+                elif re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", correo_usuario or ""):
+                    # Se manda un correo explicando que no hay cuenta. Es lo que
+                    # permite dar la misma respuesta en pantalla sin dejar a
+                    # nadie esperando un mensaje que nunca llega.
+                    correo_mod.enviar_aviso_sin_cuenta(correo_usuario)
+                rate_limit.registrar_fallo(f"recuperar:{correo_usuario}", ip)
+
+            flash(
+                "Si esa dirección tiene una cuenta en QuestCash, te enviamos un "
+                "enlace para restablecer la contraseña. Revisa tu correo.",
+                "info",
+            )
+            return redirect(url_for("login"))
+
+        return render_template("auth/recuperar.html")
+
+    @app.route("/recuperar/<token>", methods=["GET", "POST"])
+    def restablecer_password(token):
+        usuario, registro = tokens_correo.usuario_de(token)
+        if usuario is None:
+            flash(
+                "Ese enlace ya no es válido. Puede que haya caducado o que ya se "
+                "haya usado. Pide uno nuevo.",
+                "danger",
+            )
+            return redirect(url_for("recuperar_password"))
+
+        if request.method == "POST":
+            password = request.form.get("password", "")
+            password2 = request.form.get("password2", "")
+
+            errores = validar_password_nueva(password, password2, usuario.nombre)
+            if errores:
+                for e in errores:
+                    flash(e, "danger")
+                return render_template("auth/restablecer.html", token=token)
+
+            usuario.password_hash = hashear_password(password)
+            tokens_correo.consumir(registro)
+            # Cambiar la contraseña cierra todas las sesiones: si alguien había
+            # entrado con la contraseña vieja, deja de tener acceso ahora.
+            revocar_todas_las_sesiones(usuario, "cambio_password")
+            db.session.commit()
+
+            correo_mod.enviar_password_cambiada(usuario.correo)
+            session.clear()
+            flash(
+                "Tu contraseña se cambió y se cerraron todas las sesiones. "
+                "Inicia sesión con la nueva.",
+                "success",
+            )
+            return redirect(url_for("login"))
+
+        return render_template("auth/restablecer.html", token=token)
+
+    @app.route("/perfil/password", methods=["GET", "POST"])
+    @login_requerido
+    def cambiar_password():
+        """Cambio de contraseña con sesión iniciada. Exige la actual."""
+        if request.method == "POST":
+            actual = request.form.get("password_actual", "")
+            password = request.form.get("password", "")
+            password2 = request.form.get("password2", "")
+
+            errores = []
+            if not verificar_password(g.usuario_actual.password_hash, actual):
+                errores.append("La contraseña actual no es correcta.")
+            errores += validar_password_nueva(password, password2, g.usuario_actual.nombre)
+
+            if errores:
+                for e in errores:
+                    flash(e, "danger")
+                return render_template("auth/cambiar_password.html")
+
+            g.usuario_actual.password_hash = hashear_password(password)
+            revocar_todas_las_sesiones(g.usuario_actual, "cambio_password")
+            db.session.commit()
+            correo_mod.enviar_password_cambiada(g.usuario_actual.correo)
+
+            flash(
+                "Contraseña actualizada. Se cerraron las sesiones abiertas en "
+                "otros dispositivos.",
+                "success",
+            )
+            return redirect(url_for("perfil"))
+
+        return render_template("auth/cambiar_password.html")
+
+    @app.route("/perfil/mis-datos")
+    @login_requerido
+    def exportar_mis_datos():
+        """Descarga todo lo que QuestCash guarda de esta persona.
+
+        Cubre el derecho de acceso y el de portabilidad: formato estructurado,
+        legible y que el usuario puede llevarse.
+        """
+        usuario = g.usuario_actual
+        datos = {
+            "exportado": datetime.utcnow().isoformat(),
+            "cuenta": {
+                "nombre": usuario.nombre,
+                "correo": usuario.correo,
+                "alias": usuario.alias,
+                "puntos_totales": usuario.puntos_totales,
+                "fecha_registro": usuario.fecha_registro.isoformat() if usuario.fecha_registro else None,
+            },
+            "metas": [
+                {"nombre": q.nombre, "descripcion": q.descripcion,
+                 "monto_objetivo": str(q.monto_objetivo), "monto_actual": str(q.monto_actual),
+                 "fecha_limite": q.fecha_limite.isoformat() if q.fecha_limite else None,
+                 "estatus": q.estatus, "tipo": q.tipo}
+                for q in obtener_quests_usuario(usuario)
+            ],
+            "movimientos": [
+                {"tipo": m.tipo, "monto": str(m.monto), "nota": m.nota,
+                 "categoria": m.categoria,
+                 "fecha": m.fecha.isoformat() if m.fecha else None}
+                for m in Movimiento.query.filter_by(usuario_id=usuario.id).all()
+            ],
+            "gastos": [
+                {"monto": str(x.monto), "descripcion": x.descripcion,
+                 "fecha": x.fecha.isoformat() if x.fecha else None,
+                 "metodo_pago": x.metodo_pago,
+                 "categoria": x.categoria.nombre if x.categoria else None}
+                for x in Gasto.query.filter_by(usuario_id=usuario.id).all()
+            ],
+            "insignias": [
+                {"codigo": ui.insignia.codigo, "nombre": ui.insignia.nombre,
+                 "obtenida": ui.fecha_obtenida.isoformat() if ui.fecha_obtenida else None}
+                for ui in UsuarioInsignia.query.filter_by(usuario_id=usuario.id).all()
+            ],
+        }
+        respuesta = app.response_class(
+            json.dumps(datos, ensure_ascii=False, indent=2, default=str),
+            mimetype="application/json",
+        )
+        respuesta.headers["Content-Disposition"] = 'attachment; filename="questcash-mis-datos.json"'
+        return respuesta
+
+    @app.route("/perfil/eliminar", methods=["GET", "POST"])
+    @login_requerido
+    def eliminar_mi_cuenta():
+        """Borra la cuenta. Exige la contraseña y escribir ELIMINAR.
+
+        La contraseña porque el token o la cookie no bastan para algo
+        irreversible; la palabra porque un clic accidental no debe destruir el
+        historial financiero de nadie.
+        """
+        if request.method == "POST":
+            password = request.form.get("password", "")
+            confirmacion = request.form.get("confirmacion", "").strip().upper()
+
+            errores = []
+            if not verificar_password(g.usuario_actual.password_hash, password):
+                errores.append("La contraseña no es correcta.")
+            if confirmacion != "ELIMINAR":
+                errores.append('Escribe ELIMINAR para confirmar.')
+
+            if errores:
+                for e in errores:
+                    flash(e, "danger")
+                return render_template("auth/eliminar_cuenta.html")
+
+            eliminar_cuenta(g.usuario_actual)
+            db.session.commit()
+            session.clear()
+            flash("Tu cuenta y todos tus datos se eliminaron.", "info")
+            return redirect(url_for("login"))
+
+        return render_template("auth/eliminar_cuenta.html")
+
+    # ----------------- Salud -----------------
+    #
+    # Dos sondas distintas a propósito, porque responden preguntas distintas:
+    #
+    #   /health  ¿el proceso está vivo? No toca la base. Si esto falla, hay que
+    #            reiniciar el contenedor.
+    #   /ready   ¿puede atender tráfico? Comprueba la base. Si esto falla pero
+    #            /health responde, el problema está fuera de la aplicación y
+    #            reiniciarla no arregla nada.
+    #
+    # Confundirlas hace que un orquestador reinicie la aplicación en bucle
+    # cuando lo que se cayó fue Postgres.
+
+    @app.route("/health")
+    def health():
+        return jsonify({"estado": "vivo"})
+
+    @app.route("/ready")
+    def ready():
+        detalles = {}
+        listo = True
+
+        try:
+            db.session.execute(db.text("SELECT 1"))
+            detalles["base_de_datos"] = "ok"
+        except Exception as exc:
+            detalles["base_de_datos"] = f"error: {type(exc).__name__}"
+            listo = False
+
+        try:
+            import rate_limit
+            almacen = rate_limit.almacen()
+            detalles["estado_compartido"] = (
+                "redis" if almacen.__class__.__name__ == "_AlmacenRedis" else "memoria"
+            )
+        except Exception as exc:
+            detalles["estado_compartido"] = f"error: {type(exc).__name__}"
+            # Sin Redis la aplicación sirve, pero el control de intentos deja
+            # de compartirse: es degradación, no caída.
+
+        return jsonify({"estado": "listo" if listo else "no listo", **detalles}), (200 if listo else 503)
+
+    @app.route("/privacidad")
+    def aviso_privacidad():
+        """BORRADOR del aviso de privacidad. Ver la plantilla."""
+        return render_template("legal/privacidad.html")
+
+    @app.route("/terminos")
+    def terminos():
+        """BORRADOR de los términos y condiciones. Ver la plantilla."""
+        return render_template("legal/terminos.html")
 
     @app.route("/logout")
     @login_requerido
@@ -1766,8 +852,8 @@ def create_app():
             "porcentaje_ingreso_gastado": questy_home.get("porcentaje_ingreso_gastado", 0.0),
         }
 
-        total_objetivo = sum(q.monto_objetivo for q in quests) or 0
-        total_actual = sum(q.monto_actual for q in quests) or 0
+        total_objetivo = float(sum(q.monto_objetivo for q in quests) or 0)
+        total_actual = float(sum(q.monto_actual for q in quests) or 0)
 
         if total_objetivo > 0:
             progreso_global = int(total_actual / total_objetivo * 100)
@@ -1999,24 +1085,10 @@ def create_app():
             fecha_generacion=fecha_generacion,
         )
 
-    def obtener_o_crear_categoria_gasto(nombre_raw):
-        """ 
-        Normaliza el nombre de categoría y la crea si no existe.
-        Las categorías son globales (compartidas entre usuarios).
-        """
-        nombre = (nombre_raw or "").strip()
-        if not nombre:
-            nombre = "Otros"
-
-        # Normalizar para que se vea bonito en UI
-        nombre = nombre.capitalize()
-
-        categoria = CategoriaGasto.query.filter_by(nombre=nombre).first()
-        if not categoria:
-            categoria = CategoriaGasto(nombre=nombre)
-            db.session.add(categoria)
-            db.session.commit()
-        return categoria
+    def obtener_o_crear_categoria_gasto(nombre_raw, usuario=None):
+        """Delega en services/gastos. Las categorías son del sistema o del
+        usuario que las creó; ya no hay una tabla global escribible por todos."""
+        return gastos_svc.obtener_o_crear(nombre_raw, usuario or g.usuario_actual)
 
     @app.route("/gastos")
     @login_requerido
@@ -2038,9 +1110,9 @@ def create_app():
             .all()
         )
 
-        total_mes = sum(g.monto for g in gastos) if gastos else 0
+        total_mes = float(sum(g.monto for g in gastos) or 0) if gastos else 0.0
 
-        categorias = CategoriaGasto.query.order_by(CategoriaGasto.nombre).all()
+        categorias = gastos_svc.visibles_para(g.usuario_actual)
 
         return render_template(
             "gastos/list.html",
@@ -2067,7 +1139,7 @@ def create_app():
                 for e in errores:
                     flash(e, "danger")
 
-                categorias = CategoriaGasto.query.order_by(CategoriaGasto.nombre).all()
+                categorias = gastos_svc.visibles_para(g.usuario_actual)
                 hoy_iso = date.today().strftime("%Y-%m-%d")
                 return render_template(
                     "gastos/form.html",
@@ -2105,7 +1177,7 @@ def create_app():
             return redirect(url_for("listar_gastos"))
 
         # GET: cargar formulario
-        categorias = CategoriaGasto.query.order_by(CategoriaGasto.nombre).all()
+        categorias = gastos_svc.visibles_para(g.usuario_actual)
         hoy_iso = date.today().strftime("%Y-%m-%d")
 
         return render_template(
@@ -2510,41 +1582,58 @@ def create_app():
                 if not re.match(email_regex, correo):
                     errores.append("El correo no tiene un formato válido.")
 
-            # 3) Validar existencia en la base de datos y reglas de negocio
+            # 3) Reglas de negocio.
+            #
+            # NO se comprueba si la cuenta existe. Antes sí, y la respuesta
+            # "No existe un usuario registrado con ese correo" convertía este
+            # formulario en un oráculo para averiguar quién tiene cuenta en
+            # QuestCash. La invitación se registra en los dos casos.
+            bi = indice_ciego(correo)
+            if not errores and bi == g.usuario_actual.correo_bi:
+                errores.append("No puedes invitarte a ti mismo.")
+
             if not errores:
-                usuario_invitado = Usuario.query.filter_by(correo=correo).first()
-                if not usuario_invitado:
-                    errores.append("No existe un usuario registrado con ese correo.")
-                elif usuario_invitado.id == quest.usuario_id:
-                    errores.append("Tú ya eres el creador de este reto.")
-                else:
-                    ya_participa = ParticipacionQuest.query.filter_by(
-                        usuario_id=usuario_invitado.id,
-                        quest_id=quest.id
-                    ).first()
-                    if ya_participa:
-                        errores.append("Ese usuario ya participa en este reto.")
+                ya_participa = (
+                    ParticipacionQuest.query
+                    .join(Usuario, ParticipacionQuest.usuario_id == Usuario.id)
+                    .filter(ParticipacionQuest.quest_id == quest.id, Usuario.correo_bi == bi)
+                    .first()
+                )
+                if ya_participa:
+                    errores.append("Esa persona ya participa en este reto.")
 
             if errores:
                 for e in errores:
                     flash(e, "danger")
             else:
-                nueva_part = ParticipacionQuest(
-                    usuario_id=usuario_invitado.id,
-                    quest_id=quest.id,
-                    rol="colaborador",
+                pendiente = InvitacionQuest.query.filter_by(
+                    quest_id=quest.id, correo_bi=bi, estado=InvitacionQuest.PENDIENTE
+                ).first()
+                if pendiente is None:
+                    invitacion = InvitacionQuest(
+                        quest_id=quest.id, invitado_por_id=g.usuario_actual.id
+                    )
+                    invitacion.set_correo(correo)
+                    db.session.add(invitacion)
+                    db.session.commit()
+                # Mismo mensaje exista o no la cuenta, y exista o no ya una
+                # invitación pendiente: es lo que cierra la enumeración.
+                flash(
+                    "Invitación enviada. Aparecerá en el reto cuando la persona la acepte.",
+                    "success",
                 )
-                db.session.add(nueva_part)
-                db.session.commit()
-                flash(f"Se ha añadido a {usuario_invitado.nombre} como colaborador.", "success")
 
             return redirect(url_for("gestionar_colaboradores", quest_id=quest.id))
 
         participaciones = ParticipacionQuest.query.filter_by(quest_id=quest.id).all()
+        invitaciones_pendientes = InvitacionQuest.query.filter_by(
+            quest_id=quest.id, estado=InvitacionQuest.PENDIENTE
+        ).order_by(InvitacionQuest.creado_en.desc()).all()
         return render_template(
             "quests/colaboradores.html",
             quest=quest,
-            participaciones=participaciones
+            participaciones=participaciones,
+            invitaciones_pendientes=invitaciones_pendientes,
         )
 
     @app.route("/perfil", methods=["GET", "POST"])
@@ -2633,6 +1722,7 @@ def create_app():
     api_ctx = {
         "PROFILE_RANKS": PROFILE_RANKS,
         "calcular_estado_rango_perfil": calcular_estado_rango_perfil,
+        "calcular_estadisticas": calcular_estadisticas,
         "obtener_quests_usuario": obtener_quests_usuario,
         "usuario_participa_en_quest": usuario_participa_en_quest,
         "generar_notificaciones": generar_notificaciones,
@@ -2646,20 +1736,42 @@ def create_app():
         "generar_resumen_questy_usuario": generar_resumen_questy_usuario,
         "humanizar_segmento_questy": humanizar_segmento_questy,
         "obtener_o_crear_categoria_gasto": obtener_o_crear_categoria_gasto,
+        "eliminar_cuenta": eliminar_cuenta,
         "procesar_registro_movimiento": procesar_registro_movimiento,
-        "intentos_login": intentos_login,
         "MAX_LOGIN_INTENTOS": MAX_LOGIN_INTENTOS,
         "BLOQUEO_MINUTOS": BLOQUEO_MINUTOS,
     }
     register_api(app, csrf, api_ctx)
 
-    # Crear tablas + insignias base al finalizar la configuración de la app
-    with app.app_context():
-        db.create_all()
-        seed_insignias()
+    # El esquema NO se toca al arrancar. Las migraciones son un paso
+    # explícito del despliegue: `flask db upgrade`, que corre
+    # scripts/preparar_bd.py desde wait-for-db.sh antes de levantar gunicorn.
+    #
+    # Antes aquí vivían db.create_all() + un ALTER TABLE best-effort. Eso no
+    # dejaba historial, no se podía revertir ni revisar en un pull request, y
+    # con varios workers los procesos competían ejecutando DDL a la vez.
     return app
 
 app = create_app()
+
 if __name__ == "__main__":
-    
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # SERVIDOR DE DESARROLLO ÚNICAMENTE.
+    #
+    # En producción la aplicación la sirve gunicorn como `app:app` (ver
+    # Dockerfile y docker-compose.segmentado.yml). El servidor de Werkzeug es
+    # mono-hilo, no soporta carga real y —con debug activo— publica una consola
+    # interactiva que ejecuta código Python arbitrario en el contenedor.
+    #
+    # Por eso el modo debug ya no viene activado por omisión: hay que pedirlo
+    # explícitamente con FLASK_DEBUG=1, y solo en la máquina de desarrollo.
+    #
+    #     FLASK_DEBUG=1 PORT=5001 python app.py
+    #
+    # Se mantiene 0.0.0.0 por omisión para que la app móvil siga alcanzando
+    # este servidor desde un teléfono de la red local durante el desarrollo.
+    debug = os.environ.get("FLASK_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+    app.run(
+        host=os.environ.get("FLASK_RUN_HOST", "0.0.0.0"),
+        port=int(os.environ.get("PORT", 5000)),
+        debug=debug,
+    )

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+
+    <div class="alert alert-warning">
+      <p class="mb-1"><strong>Este documento es un BORRADOR, no un aviso de privacidad válido.</strong></p>
+      <p class="mb-0 small">
+        Recoge de forma honesta qué datos trata QuestCash hoy, para que sirva de
+        insumo a la revisión legal. <strong>No debe publicarse ni presentarse
+        como aviso de privacidad</strong> hasta que lo revise un abogado: el
+        marco mexicano cambió de forma sustancial en 2025 y QuestCash trata
+        datos patrimoniales, categoría que exige consentimiento expreso.
+      </p>
+    </div>
+
+    <h1 class="h3 fw-bold">Qué datos trata QuestCash</h1>
+    <p class="text-muted">Inventario técnico, verificado contra el código y el esquema de la base de datos.</p>
+
+    <h2 class="h5 mt-4">Datos que nos das</h2>
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead><tr><th>Dato</th><th>Para qué</th><th>Cómo se guarda</th></tr></thead>
+        <tbody>
+          <tr><td>Nombre y alias</td><td>Identificarte en la app</td><td>Cifrado AES-256-GCM</td></tr>
+          <tr><td>Correo electrónico</td><td>Iniciar sesión y recuperar la cuenta</td><td>Cifrado, con índice ciego para poder buscarlo</td></tr>
+          <tr><td>Contraseña</td><td>Autenticarte</td><td>Hash scrypt — no se guarda ni se puede recuperar</td></tr>
+          <tr><td>Metas de ahorro</td><td>La función principal</td><td>Nombre y descripción en claro; importes en claro</td></tr>
+          <tr><td>Movimientos y sus notas</td><td>Registrar tu progreso</td><td>Notas cifradas; importes en claro</td></tr>
+          <tr><td>Gastos y sus descripciones</td><td>Analizar tus hábitos</td><td>Descripciones cifradas; importes en claro</td></tr>
+          <tr><td>Foto de perfil</td><td>Personalizar tu cuenta</td><td>Archivo en el servidor</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 class="h5 mt-4">Datos que se generan solos</h2>
+    <ul>
+      <li>Puntos, rangos, insignias y rachas, calculados a partir de tu actividad.</li>
+      <li>Un segmento de comparación que <strong>no se guarda</strong>: se calcula al vuelo cada vez.</li>
+      <li>Sesiones abiertas: el dispositivo y cuándo entraste, para que puedas cerrarlas.</li>
+      <li>Intentos fallidos de inicio de sesión, con la identidad hasheada y borrado automático a los minutos.</li>
+    </ul>
+
+    <h2 class="h5 mt-4">Con quién se comparten</h2>
+    <p>
+      <strong>Con nadie.</strong> QuestCash no vende ni cede datos, no usa
+      analítica de terceros, no incrusta rastreadores y no carga ningún recurso
+      externo: todas las librerías de la web se sirven desde el propio servidor.
+    </p>
+    <p>
+      <strong>Questy no es una IA externa.</strong> Es un motor de reglas que
+      corre en el mismo servidor y compara tu situación con datos públicos del
+      INEGI. Ningún dato tuyo sale hacia un proveedor de inteligencia artificial.
+    </p>
+    <p class="text-muted small">
+      Cuando se contraten proveedores de correo, alojamiento y almacenamiento,
+      habrá que declararlos aquí, incluida la transferencia internacional si
+      están fuera de México.
+    </p>
+
+    <h2 class="h5 mt-4">Qué puedes hacer con tus datos</h2>
+    <ul>
+      <li><strong>Verlos y llevártelos:</strong> <a href="{{ url_for('exportar_mis_datos') }}">descargar todo en un archivo</a>.</li>
+      <li><strong>Corregirlos:</strong> desde tu <a href="{{ url_for('perfil') }}">perfil</a>.</li>
+      <li><strong>Borrarlos:</strong> <a href="{{ url_for('eliminar_mi_cuenta') }}">eliminar tu cuenta</a>. El borrado es real, no una baja.</li>
+    </ul>
+    <p class="text-muted small">
+      Al eliminar tu cuenta, tus aportes a metas compartidas de otras personas
+      no se borran pero dejan de estar ligados a ti: borrarlos descuadraría el
+      progreso de gente que no lo ha pedido.
+    </p>
+
+    <p class="text-muted small mt-4">
+      Falta por definir con asesoría legal: responsable del tratamiento y su
+      domicilio, plazos de conservación, procedimiento y plazo de respuesta
+      ARCO, canal de contacto, edad mínima y cómo se comunican los cambios.
+    </p>
+  </div>
+</div>
+{% endblock %}

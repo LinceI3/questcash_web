@@ -17,3 +17,8 @@ questcash.db
 
 # Datasets crudos pesados
 data/raw/
+
+# Respaldos de la base: contienen datos reales, nunca se versionan.
+respaldos/
+*.sql.gz
+*.sql.gz.gpg

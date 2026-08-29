@@ -1,0 +1,15 @@
+Base de datos : sqlite:///questcash.db
+Dialecto      : sqlite
+Modo          : ESCRITURA
+------------------------------------------------------------------
+Respaldo       : questcash.db.bak-20260817-033247
+Agregando columna usuarios.correo_bi ...
+  usuarios.nombre         25 de   25 filas cifradas
+  usuarios.correo         25 de   25 filas cifradas
+  usuarios.alias           3 de   25 filas cifradas
+  movimientos.nota            7 de   53 filas cifradas
+  gastos.descripcion    13 de   15 filas cifradas
+  usuarios.correo_bi  25 índices ciegos calculados
+Índice UNIQUE ux_usuarios_correo_bi creado.
+------------------------------------------------------------------
+Listo. 73 valores cifrados.

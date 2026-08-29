@@ -6,8 +6,34 @@ Funciones puras (sin closures de Flask): reciben strings crudos, devuelven
 """
 import re
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from models import Usuario
+
+# Máximo aceptado en cualquier importe. Cabe de sobra en Numeric(14, 2).
+MONTO_MAXIMO = Decimal("1000000000")
+
+
+def a_dinero(crudo):
+    """Convierte la entrada del usuario en un Decimal de dos decimales.
+
+    Se parte del TEXTO original, no de un float intermedio: `Decimal("0.1")`
+    vale exactamente 0.1, mientras que `Decimal(0.1)` arrastra el error binario
+    del float. Por eso la conversión es directa desde la cadena.
+
+    Lanza ValueError si el valor no es un número finito. `Decimal` acepta
+    "nan" e "infinity" igual que `float`, así que la comprobación sigue siendo
+    necesaria: sin ella, NaN pasaba todas las validaciones —toda comparación
+    con NaN es falsa— y corrompía el monto de la meta de forma irreversible.
+    """
+    try:
+        valor = Decimal(str(crudo).strip())
+    except (InvalidOperation, TypeError, ValueError, ArithmeticError) as exc:
+        raise ValueError("monto inválido") from exc
+    if not valor.is_finite():
+        raise ValueError("monto no finito")
+    # Redondeo a centavos: es la unidad mínima con la que trabaja el producto.
+    return valor.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 ALLOWED_EMAIL_TLDS = (".com", ".mx", ".com.mx", ".org", ".net", ".edu", ".gob.mx")
@@ -70,9 +96,38 @@ def validar_registro(nombre, correo, password, password2):
             errores.append("La contraseña no puede ser igual a tu correo.")
 
     if correo and not errores:
-        if Usuario.query.filter_by(correo=correo).first():
+        # Búsqueda por índice ciego: la columna `correo` está cifrada y no
+        # se puede consultar directamente (ver crypto_utils.py).
+        if Usuario.por_correo(correo):
             errores.append("Ya existe una cuenta registrada con ese correo.")
 
+    return errores
+
+
+def validar_password_nueva(password, password2, nombre=None, correo=None):
+    """Reglas de una contraseña nueva, compartidas por el registro, el cambio y
+    el restablecimiento. Antes vivían solo dentro de validar_registro, así que
+    cualquier flujo nuevo habría acabado duplicándolas o relajándolas."""
+    errores = []
+    if not password:
+        errores.append("La contraseña es obligatoria.")
+        return errores
+    if password != password2:
+        errores.append("Las contraseñas no coinciden.")
+    if len(password) < 8:
+        errores.append("La contraseña debe tener al menos 8 caracteres.")
+    if len(password) > 128:
+        errores.append("La contraseña es demasiado larga (máximo 128 caracteres).")
+    if not any(c.islower() for c in password):
+        errores.append("La contraseña debe incluir al menos una letra minúscula.")
+    if not any(c.isupper() for c in password):
+        errores.append("La contraseña debe incluir al menos una letra mayúscula.")
+    if not any(c.isdigit() for c in password):
+        errores.append("La contraseña debe incluir al menos un número.")
+    if nombre and password.lower() == nombre.lower():
+        errores.append("La contraseña no puede ser igual a tu nombre.")
+    if correo and password.lower() == correo.lower():
+        errores.append("La contraseña no puede ser igual a tu correo.")
     return errores
 
 
@@ -89,7 +144,7 @@ def validar_quest_form(nombre, monto_objetivo_raw, monto_actual_raw, fecha_limit
 
     monto_objetivo_float = None
     try:
-        monto_objetivo_float = float(monto_objetivo_raw)
+        monto_objetivo_float = a_dinero(monto_objetivo_raw)
         if monto_objetivo_float <= 0:
             errores.append("El monto objetivo debe ser mayor a 0.")
     except (TypeError, ValueError):
@@ -97,7 +152,7 @@ def validar_quest_form(nombre, monto_objetivo_raw, monto_actual_raw, fecha_limit
 
     monto_actual_float = None
     try:
-        monto_actual_float = float(monto_actual_raw) if monto_actual_raw else 0.0
+        monto_actual_float = a_dinero(monto_actual_raw) if monto_actual_raw else Decimal("0.00")
         if monto_actual_float < 0:
             errores.append("El monto actual no puede ser negativo.")
     except (TypeError, ValueError):
@@ -117,7 +172,7 @@ def validar_quest_form(nombre, monto_objetivo_raw, monto_actual_raw, fecha_limit
     if descripcion and len(descripcion) > 500:
         errores.append("La descripción es demasiado larga (máximo 500 caracteres).")
 
-    if monto_objetivo_float is not None and monto_objetivo_float > 1_000_000_000:
+    if monto_objetivo_float is not None and monto_objetivo_float > MONTO_MAXIMO:
         errores.append("El monto objetivo es demasiado grande.")
     if monto_objetivo_float is not None and monto_actual_float is not None:
         if monto_actual_float > monto_objetivo_float:
@@ -155,10 +210,10 @@ def validar_movimiento(tipo_raw, monto_raw, nota_raw, categoria_raw, quest):
 
     monto_float = None
     try:
-        monto_float = float(monto_raw)
+        monto_float = a_dinero(monto_raw)
         if monto_float <= 0:
             errores.append("El monto debe ser mayor a 0.")
-        if monto_float > 1_000_000_000:
+        if monto_float > MONTO_MAXIMO:
             errores.append("El monto es demasiado grande.")
     except (TypeError, ValueError):
         errores.append("Monto inválido.")
@@ -196,10 +251,10 @@ def validar_gasto(monto_raw, descripcion_raw, fecha_raw):
 
     monto = None
     try:
-        monto = float(monto_raw)
+        monto = a_dinero(monto_raw)
         if monto <= 0:
             errores.append("El monto del gasto debe ser mayor a 0.")
-        if monto > 1_000_000_000:
+        if monto > MONTO_MAXIMO:
             errores.append("El monto del gasto es demasiado grande.")
     except (TypeError, ValueError):
         errores.append("El monto del gasto no es válido.")

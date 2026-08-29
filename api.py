@@ -7,28 +7,67 @@ referencias a los helpers ya definidos como closures dentro de `create_app()`
 módulo solo traduce esas mismas funciones a peticiones/respuestas JSON con
 auth por Bearer token (JWT) en vez de sesión por cookie.
 """
+import json
+import os
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 
-from flask import Blueprint, g, jsonify, request
-from werkzeug.security import check_password_hash, generate_password_hash
+from flask import Blueprint, current_app, g, jsonify, request
+from sqlalchemy.exc import IntegrityError
+from werkzeug.security import check_password_hash, generate_password_hash  # noqa: F401 (compatibilidad)
+from password_hashing import hashear_password, necesita_rehash, verificar_password
 
-from auth_jwt import generate_token, jwt_required
+import rate_limit
+from services import gastos as gastos_svc
+from services import rangos
+import correo as correo_mod
+import rate_limit
+import tokens_correo
+from auth_jwt import (
+    canjear_refresh_token,
+    emitir_refresh_token,
+    generar_access_token,
+    jwt_required,
+    revocar_refresh_token,
+    revocar_todas_las_sesiones,
+)
 from ia.services.questy_engine import evaluate_quest
+from crypto_utils import indice_ciego
 from models import (
     CategoriaGasto,
+    ClaveIdempotencia,
+    ClaveIdempotencia,
+    InvitacionQuest,
+    Sesion,
     Gasto,
     Insignia,
     Movimiento,
+    Notificacion,
     ParticipacionQuest,
     Quest,
     Usuario,
     UsuarioInsignia,
     db,
 )
-from validators import validar_gasto, validar_movimiento, validar_quest_form, validar_registro
+from validators import (
+    validar_gasto,
+    validar_movimiento,
+    validar_password_nueva,
+    validar_quest_form,
+    validar_registro,
+)
 
 EMAIL_REGEX = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+
+ICONOS_META_PERMITIDOS = {
+    "airplane", "bicycle", "laptop", "shield-checkmark", "home",
+    "school", "heart", "wallet", "car-sport", "game-controller", "fitness",
+}
+
+CATEGORY_COLOR_PALETTE = [
+    "#2563EB", "#4ADE80", "#FBBF24", "#8B5CF6", "#F97316", "#EC4899", "#14B8A6", "#D1D5DB",
+]
 
 
 def serialize_user(usuario):
@@ -62,6 +101,7 @@ def serialize_quest(quest):
         "es_colaborativo": quest.es_colaborativo,
         "usuario_id": quest.usuario_id,
         "progreso_porcentaje": quest.progreso_porcentaje(),
+        "icono": quest.icono,
     }
 
 
@@ -107,16 +147,225 @@ def serialize_insignia(insignia, obtenida, fecha_obtenida=None):
 
 
 def serialize_participacion(participacion):
+    """Datos de un participante visibles para el resto de la meta.
+
+    NO incluye el correo. Antes sí, y lo recibía cualquier otro participante a
+    través de GET /quests/<id> —basta con participar, no hace falta ser el
+    creador—, así que la dirección de una persona quedaba expuesta a terceros
+    con los que nunca acordó compartirla. El nombre y el alias son lo que hace
+    falta para saber quién aportó a una meta compartida.
+    """
+    usuario = participacion.usuario
     return {
         "id": participacion.id,
         "rol": participacion.rol,
         "fecha_union": participacion.fecha_union.isoformat() if participacion.fecha_union else None,
         "usuario": {
-            "id": participacion.usuario.id,
-            "nombre": participacion.usuario.nombre,
-            "correo": participacion.usuario.correo,
+            "id": usuario.id,
+            "nombre": usuario.nombre,
+            "alias": usuario.alias,
         },
     }
+
+
+def serialize_invitacion(invitacion, para_creador=False):
+    """Una invitación vista por el creador o por el invitado.
+
+    Al invitado no se le manda el correo: ya sabe cuál es el suyo, y evitarlo
+    quita una copia de un dato personal viajando sin necesidad.
+    """
+    datos = {
+        "id": invitacion.id,
+        "estado": invitacion.estado,
+        "creada": invitacion.creado_en.isoformat() if invitacion.creado_en else None,
+        "respondida": invitacion.respondida_en.isoformat() if invitacion.respondida_en else None,
+        "quest": {
+            "id": invitacion.quest.id,
+            "nombre": invitacion.quest.nombre,
+            "monto_objetivo": invitacion.quest.monto_objetivo,
+            "fecha_limite": invitacion.quest.fecha_limite.isoformat() if invitacion.quest.fecha_limite else None,
+            "icono": invitacion.quest.icono,
+        },
+        "invitado_por": {
+            "id": invitacion.invitado_por.id,
+            "nombre": invitacion.invitado_por.nombre,
+        },
+    }
+    if para_creador:
+        datos["correo"] = invitacion.correo
+    return datos
+
+
+def serialize_notificacion(notif):
+    """Notificación persistida (evento real: meta completada, insignia,
+    aporte de colaborador)."""
+    return {
+        "id": notif.id,
+        "tipo": notif.tipo,
+        "severidad": None,
+        "titulo": notif.titulo,
+        "mensaje": notif.mensaje,
+        "icono": notif.icono,
+        "color": notif.color,
+        "leida": notif.leida,
+        "quest_id": notif.quest_id,
+        "fecha": notif.fecha_creacion.isoformat() if notif.fecha_creacion else None,
+    }
+
+
+def serialize_notificacion_dinamica(item):
+    """Notificación calculada al vuelo por generar_notificaciones() (app.py) —
+    recordatorios de vencimiento y consejos de gasto. No tiene id persistido
+    ni estado de lectura real, así que se marca siempre como leída."""
+    return {
+        "id": None,
+        "tipo": item.get("categoria", "recordatorio"),
+        "severidad": item.get("tipo"),
+        "titulo": item.get("titulo", "Aviso"),
+        "mensaje": item.get("mensaje"),
+        "icono": item.get("icono"),
+        "color": item.get("color"),
+        "leida": True,
+        "quest_id": item.get("quest_id"),
+        "fecha": None,
+    }
+
+
+def _dispositivo_de_la_peticion():
+    """Etiqueta legible del cliente, para la pantalla de sesiones activas."""
+    return (request.headers.get("X-Dispositivo") or request.headers.get("User-Agent") or "")[:120]
+
+
+def _respuesta_de_sesion(usuario, rank_state=None, codigo=200):
+    """Cuerpo común de login, registro y refresh.
+
+    `token` se mantiene como alias del access token: es el campo que consumen
+    los clientes ya publicados y quitarlo los rompería de golpe. Los nuevos
+    deben usar `access_token` y `refresh_token`.
+    """
+    access, expira_en = generar_access_token(usuario)
+    refresh, _ = emitir_refresh_token(usuario, _dispositivo_de_la_peticion())
+    db.session.commit()
+
+    cuerpo = {
+        "access_token": access,
+        "refresh_token": refresh,
+        "expires_in": expira_en,
+        "token_type": "Bearer",
+        "token": access,          # alias de compatibilidad
+        "user": serialize_user(usuario),
+    }
+    if rank_state is not None:
+        cuerpo["rank_state"] = rank_state
+    return jsonify(cuerpo), codigo
+
+
+IDEMPOTENCIA_HORAS = 24
+
+# codigo_http = 0 marca una clave RESERVADA pero cuya operación todavía no ha
+# terminado. No es un código HTTP real, y por eso no puede confundirse con una
+# respuesta guardada.
+EN_CURSO = 0
+
+
+def idempotente(vista):
+    """Hace que repetir una operación con la misma Idempotency-Key sea inocuo.
+
+    El bloqueo de fila evita que dos aportes simultáneos se pisen. Esto evita
+    algo distinto: que el MISMO aporte se registre dos veces porque el usuario
+    tocó dos veces o la app reintentó tras un timeout. Sin la clave, el
+    servidor no puede distinguir eso de dos aportes legítimos iguales.
+
+    La clave se RESERVA ANTES de ejecutar, no después. Es la diferencia entre
+    que funcione o no: comprobar primero y guardar al final deja una ventana en
+    la que dos peticiones simultáneas no encuentran nada, ambas ejecutan, y solo
+    entonces compiten por guardar. Medido con 8 peticiones simultáneas sobre 4
+    workers: se colaban 2 movimientos aunque las 8 devolvieran el mismo id.
+
+    Reservando primero, la restricción UNIQUE de la tabla actúa de cerrojo: la
+    perdedora nunca llega a ejecutar la operación.
+
+    Sin cabecera, la vista corre como siempre: los clientes que aún no la
+    envían siguen funcionando, sin protección pero sin romperse.
+    """
+    @wraps(vista)
+    def envoltorio(*args, **kwargs):
+        clave = (request.headers.get("Idempotency-Key") or "").strip()[:128]
+        if not clave:
+            return vista(*args, **kwargs)
+
+        usuario = g.api_usuario
+        endpoint = request.endpoint or vista.__name__
+        ahora = datetime.now(timezone.utc)
+
+        def buscar():
+            return ClaveIdempotencia.query.filter_by(
+                usuario_id=usuario.id, endpoint=endpoint, clave=clave
+            ).first()
+
+        def reproducir(fila):
+            respuesta = current_app.response_class(
+                fila.respuesta, status=fila.codigo_http, mimetype="application/json"
+            )
+            respuesta.headers["Idempotent-Replay"] = "true"
+            return respuesta
+
+        previa = buscar()
+        if previa is not None and previa.expira_en > ahora:
+            if previa.codigo_http == EN_CURSO:
+                # Otra petición con esta misma clave está ejecutándose. No se
+                # puede devolver un resultado que aún no existe ni ejecutar en
+                # paralelo: se pide reintentar.
+                return jsonify({"error": "idempotency_in_progress"}), 409
+            return reproducir(previa)
+
+        # Reserva. Si otra petición gana, la restricción UNIQUE la rechaza aquí
+        # —antes de tocar nada— y esta no llega a ejecutar la operación.
+        reserva = ClaveIdempotencia(
+            usuario_id=usuario.id, endpoint=endpoint, clave=clave,
+            codigo_http=EN_CURSO, respuesta="",
+            expira_en=ahora + timedelta(hours=IDEMPOTENCIA_HORAS),
+        )
+        db.session.add(reserva)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            otra = buscar()
+            if otra is not None and otra.codigo_http != EN_CURSO:
+                return reproducir(otra)
+            return jsonify({"error": "idempotency_in_progress"}), 409
+
+        reserva_id = reserva.id
+
+        def liberar():
+            """Suelta la reserva para que el cliente pueda reintentar de verdad."""
+            db.session.rollback()
+            ClaveIdempotencia.query.filter_by(id=reserva_id).delete()
+            db.session.commit()
+
+        try:
+            resultado = vista(*args, **kwargs)
+        except Exception:
+            liberar()
+            raise
+
+        cuerpo, codigo = (resultado if isinstance(resultado, tuple) else (resultado, 200))
+
+        if not (200 <= codigo < 300):
+            # Si la operación falló, la clave no debe quedar quemada.
+            liberar()
+            return resultado
+
+        texto = cuerpo.get_data(as_text=True) if hasattr(cuerpo, "get_data") else str(cuerpo)
+        fila = ClaveIdempotencia.query.get(reserva_id)
+        if fila is not None:
+            fila.codigo_http = codigo
+            fila.respuesta = texto
+            db.session.commit()
+        return resultado
+
+    return envoltorio
 
 
 def register_api(app, csrf, ctx):
@@ -124,6 +373,7 @@ def register_api(app, csrf, ctx):
 
     PROFILE_RANKS = ctx["PROFILE_RANKS"]
     calcular_estado_rango_perfil = ctx["calcular_estado_rango_perfil"]
+    calcular_estadisticas = ctx["calcular_estadisticas"]
     obtener_quests_usuario = ctx["obtener_quests_usuario"]
     usuario_participa_en_quest = ctx["usuario_participa_en_quest"]
     generar_notificaciones = ctx["generar_notificaciones"]
@@ -137,23 +387,13 @@ def register_api(app, csrf, ctx):
     generar_resumen_questy_usuario = ctx["generar_resumen_questy_usuario"]
     humanizar_segmento_questy = ctx["humanizar_segmento_questy"]
     obtener_o_crear_categoria_gasto = ctx["obtener_o_crear_categoria_gasto"]
+    eliminar_cuenta = ctx["eliminar_cuenta"]
     procesar_registro_movimiento = ctx["procesar_registro_movimiento"]
-    intentos_login = ctx["intentos_login"]
     MAX_LOGIN_INTENTOS = ctx["MAX_LOGIN_INTENTOS"]
     BLOQUEO_MINUTOS = ctx["BLOQUEO_MINUTOS"]
 
-    def _augment_rank_state(rank_state):
-        """Añade `level`/`total_levels` (posición en PROFILE_RANKS) para que el
-        cliente móvil pueda mapear el sistema de rangos a un "nivel" numérico
-        sin tener que duplicar la tabla PROFILE_RANKS."""
-        rank_state = dict(rank_state)
-        idx = next(
-            (i for i, r in enumerate(PROFILE_RANKS) if r["key"] == rank_state["current_key"]),
-            0,
-        )
-        rank_state["level"] = idx + 1
-        rank_state["total_levels"] = len(PROFILE_RANKS)
-        return rank_state
+    # La numeración del escalafón vive con el escalafón, en services/rangos.py.
+    _augment_rank_state = rangos.con_nivel
 
     def _load_quest(quest_id):
         return Quest.query.get(quest_id)
@@ -174,14 +414,14 @@ def register_api(app, csrf, ctx):
 
         usuario = Usuario(
             nombre=nombre,
-            correo=correo,
-            password_hash=generate_password_hash(password),
+            password_hash=hashear_password(password),
         )
+        # set_correo cifra el correo y calcula su índice ciego.
+        usuario.set_correo(correo)
         db.session.add(usuario)
-        db.session.commit()
+        db.session.flush()
 
-        token = generate_token(usuario.id)
-        return jsonify({"token": token, "user": serialize_user(usuario)}), 201
+        return _respuesta_de_sesion(usuario, codigo=201)
 
     @api_bp.route("/auth/login", methods=["POST"])
     def api_login():
@@ -190,30 +430,26 @@ def register_api(app, csrf, ctx):
         password = data.get("password") or ""
 
         ip = request.remote_addr or "unknown"
-        clave = f"{correo}|{ip}"
-        ahora = datetime.utcnow()
 
-        # Comparte el mismo estado de bloqueo que el login web (mismo dict en memoria),
-        # para no abrir un segundo vector de fuerza bruta contra la misma cuenta.
-        intento = intentos_login.get(clave)
-        if intento and intento.get("bloqueado_hasta") and ahora < intento["bloqueado_hasta"]:
-            restante = int((intento["bloqueado_hasta"] - ahora).total_seconds())
-            return jsonify({"error": "locked", "retry_after_seconds": max(restante, 1)}), 429
+        # Comparte el mismo estado de bloqueo que el login web —ahora en Redis,
+        # no en un diccionario de proceso— para no abrir un segundo vector de
+        # fuerza bruta contra la misma cuenta desde la API.
+        bloqueo = rate_limit.segundos_de_bloqueo(correo, ip)
+        if bloqueo:
+            return jsonify({"error": "locked", "retry_after_seconds": max(bloqueo, 1)}), 429
 
-        usuario = Usuario.query.filter_by(correo=correo).first()
-        if usuario and check_password_hash(usuario.password_hash, password):
-            intentos_login.pop(clave, None)
-            token = generate_token(usuario.id)
+        usuario = Usuario.por_correo(correo)
+        if usuario and verificar_password(usuario.password_hash, password):
+            rate_limit.registrar_exito(correo, ip)
+
+            # Re-hash oportunista si la cuenta venía con parámetros antiguos.
+            if necesita_rehash(usuario.password_hash):
+                usuario.password_hash = hashear_password(password)
+                db.session.commit()
             rank_state = _augment_rank_state(calcular_estado_rango_perfil(usuario.puntos_totales or 0))
-            return jsonify({"token": token, "user": serialize_user(usuario), "rank_state": rank_state})
+            return _respuesta_de_sesion(usuario, rank_state=rank_state)
 
-        intento = intentos_login.get(clave, {"intentos": 0, "bloqueado_hasta": None})
-        intento["intentos"] = intento.get("intentos", 0) + 1
-        if intento["intentos"] >= MAX_LOGIN_INTENTOS:
-            intento["bloqueado_hasta"] = ahora + timedelta(minutes=BLOQUEO_MINUTOS)
-        intentos_login[clave] = intento
-
-        restantes = max(MAX_LOGIN_INTENTOS - intento["intentos"], 0)
+        restantes, _ = rate_limit.registrar_fallo(correo, ip)
         return jsonify({"error": "invalid_credentials", "attempts_remaining": restantes}), 401
 
     @api_bp.route("/auth/me", methods=["GET"])
@@ -222,6 +458,227 @@ def register_api(app, csrf, ctx):
         usuario = g.api_usuario
         rank_state = _augment_rank_state(calcular_estado_rango_perfil(usuario.puntos_totales or 0))
         return jsonify({"user": serialize_user(usuario), "rank_state": rank_state})
+
+    @api_bp.route("/auth/refresh", methods=["POST"])
+    def api_refresh():
+        """Canjea un refresh token por un par nuevo.
+
+        No lleva @jwt_required a propósito: el cliente llega aquí justamente
+        porque su access token caducó. La credencial es el refresh.
+        """
+        data = request.get_json(silent=True) or {}
+        crudo = (data.get("refresh_token") or "").strip()
+
+        usuario, nuevo_refresh = canjear_refresh_token(crudo, _dispositivo_de_la_peticion())
+        if usuario is None:
+            # El refresh no existe, ya se usó, se revocó o caducó. El cliente
+            # debe pedir credenciales de nuevo.
+            db.session.rollback()
+            return jsonify({"error": "invalid_refresh_token"}), 401
+
+        access, expira_en = generar_access_token(usuario)
+        db.session.commit()
+        rank_state = _augment_rank_state(calcular_estado_rango_perfil(usuario.puntos_totales or 0))
+        return jsonify({
+            "access_token": access,
+            "refresh_token": nuevo_refresh,
+            "expires_in": expira_en,
+            "token_type": "Bearer",
+            "token": access,
+            "user": serialize_user(usuario),
+            "rank_state": rank_state,
+        })
+
+    @api_bp.route("/auth/logout", methods=["POST"])
+    def api_logout():
+        """Cierra ESTA sesión en el servidor, no solo en el dispositivo.
+
+        Sin @jwt_required: cerrar sesión debe funcionar aunque el access ya
+        haya caducado, que es el caso más frecuente.
+        """
+        data = request.get_json(silent=True) or {}
+        revocada = revocar_refresh_token((data.get("refresh_token") or "").strip(), "logout")
+        db.session.commit()
+        # Respuesta idéntica revocara o no: un token inválido no debe permitir
+        # averiguar si existía.
+        return jsonify({"ok": True, "sesion_cerrada": bool(revocada)})
+
+    @api_bp.route("/auth/logout-all", methods=["POST"])
+    @jwt_required
+    def api_logout_all():
+        """Cierra la sesión en todos los dispositivos e invalida los access
+        tokens ya emitidos subiendo token_version."""
+        usuario = g.api_usuario
+        cerradas = revocar_todas_las_sesiones(usuario)
+        db.session.commit()
+        return jsonify({"ok": True, "sesiones_cerradas": int(cerradas)})
+
+    @api_bp.route("/auth/sesiones", methods=["GET"])
+    @jwt_required
+    def api_listar_sesiones():
+        """Dispositivos con sesión abierta. No expone ningún token."""
+        ahora = datetime.now(timezone.utc)
+        sesiones = (
+            Sesion.query
+            .filter(Sesion.usuario_id == g.api_usuario.id, Sesion.revocada_en.is_(None))
+            .order_by(Sesion.creado_en.desc())
+            .limit(50)
+            .all()
+        )
+        return jsonify({"sesiones": [
+            {
+                "id": s.id,
+                "dispositivo": s.dispositivo,
+                "creada": s.creado_en.isoformat() if s.creado_en else None,
+                "ultimo_uso": s.ultimo_uso.isoformat() if s.ultimo_uso else None,
+                "expira": s.expira_en.isoformat() if s.expira_en else None,
+            }
+            for s in sesiones if s.esta_viva(ahora)
+        ]})
+
+    @api_bp.route("/estadisticas", methods=["GET"])
+    @jwt_required
+    def api_estadisticas():
+        """Series históricas de ahorro.
+
+        `calcular_estadisticas()` existía desde el principio pero solo la usaba
+        la vista HTML: la app móvil no podía construir su pantalla de
+        estadísticas porque la API no exponía esto. Era el último punto abierto
+        de la auditoría original de producto.
+        """
+        usuario = g.api_usuario
+        datos = calcular_estadisticas(usuario)
+        rachas_usuario = calcular_rachas_usuario(usuario)
+
+        return jsonify({
+            "resumen": {
+                **datos["resumen"],
+                "racha_actual": rachas_usuario["racha_actual"],
+                "mejor_racha": rachas_usuario["mejor_racha"],
+            },
+            "serie_30_dias": datos["serie_30_dias"],
+            "serie_por_meta": datos["serie_por_meta"],
+        })
+
+    # ----------------- Contraseña y cuenta -----------------
+
+    def _url_app():
+        return os.environ.get("APP_URL", request.url_root).rstrip("/")
+
+    @api_bp.route("/auth/recuperar", methods=["POST"])
+    def api_recuperar():
+        """Pide un enlace de recuperación. Responde igual exista o no la cuenta."""
+        data = request.get_json(silent=True) or {}
+        correo_usuario = (data.get("correo") or "").strip().lower()
+        ip = request.remote_addr or "unknown"
+
+        if not rate_limit.segundos_de_bloqueo(f"recuperar:{correo_usuario}", ip):
+            usuario = Usuario.por_correo(correo_usuario)
+            if usuario is not None:
+                crudo = tokens_correo.emitir(usuario, ip=ip)
+                db.session.commit()
+                correo_mod.enviar_recuperacion(
+                    correo_usuario, f"{_url_app()}/recuperar/{crudo}",
+                    tokens_correo.MINUTOS_VALIDEZ,
+                )
+            elif re.match(EMAIL_REGEX, correo_usuario or ""):
+                correo_mod.enviar_aviso_sin_cuenta(correo_usuario)
+            rate_limit.registrar_fallo(f"recuperar:{correo_usuario}", ip)
+
+        return jsonify({"ok": True})
+
+    @api_bp.route("/auth/password", methods=["PUT"])
+    @jwt_required
+    def api_cambiar_password():
+        """Cambio de contraseña con sesión iniciada. Exige la actual."""
+        usuario = g.api_usuario
+        data = request.get_json(silent=True) or {}
+        actual = data.get("password_actual") or ""
+        nueva = data.get("password") or ""
+        nueva2 = data.get("password2") or ""
+
+        errores = []
+        if not verificar_password(usuario.password_hash, actual):
+            errores.append("La contraseña actual no es correcta.")
+        errores += validar_password_nueva(nueva, nueva2, usuario.nombre)
+        if errores:
+            return jsonify({"errors": errores}), 400
+
+        usuario.password_hash = hashear_password(nueva)
+        revocar_todas_las_sesiones(usuario, "cambio_password")
+        db.session.commit()
+        correo_mod.enviar_password_cambiada(usuario.correo)
+
+        # Se emite una sesión nueva: el cierre total acaba de invalidar la que
+        # el cliente traía, y expulsarlo por cambiar su propia contraseña sería
+        # absurdo.
+        return _respuesta_de_sesion(usuario)
+
+    @api_bp.route("/auth/mis-datos", methods=["GET"])
+    @jwt_required
+    def api_exportar_datos():
+        """Todo lo que QuestCash guarda de esta persona, en un solo JSON.
+
+        Es el derecho de acceso y el de portabilidad a la vez: un formato
+        estructurado y legible que el usuario puede llevarse. Se sirve como
+        descarga con nombre de archivo para que sea utilizable, no solo
+        consultable.
+        """
+        usuario = g.api_usuario
+        quests = obtener_quests_usuario(usuario)
+        movimientos = Movimiento.query.filter_by(usuario_id=usuario.id).all()
+        gastos = Gasto.query.filter_by(usuario_id=usuario.id).all()
+        insignias = UsuarioInsignia.query.filter_by(usuario_id=usuario.id).all()
+        notificaciones = Notificacion.query.filter_by(usuario_id=usuario.id).all()
+        sesiones = Sesion.query.filter_by(usuario_id=usuario.id).all()
+
+        datos = {
+            "exportado": datetime.now(timezone.utc).isoformat(),
+            "cuenta": serialize_user(usuario),
+            "metas": [serialize_quest(q) for q in quests],
+            "movimientos": [serialize_movimiento(m) for m in movimientos],
+            "gastos": [serialize_gasto(x) for x in gastos],
+            "insignias": [
+                {"codigo": ui.insignia.codigo, "nombre": ui.insignia.nombre,
+                 "obtenida": ui.fecha_obtenida.isoformat() if ui.fecha_obtenida else None}
+                for ui in insignias
+            ],
+            "notificaciones": [serialize_notificacion(n) for n in notificaciones],
+            "sesiones": [
+                {"dispositivo": x.dispositivo,
+                 "creada": x.creado_en.isoformat() if x.creado_en else None,
+                 "revocada": x.revocada_en.isoformat() if x.revocada_en else None}
+                for x in sesiones
+            ],
+        }
+        respuesta = current_app.response_class(
+            json.dumps(datos, ensure_ascii=False, indent=2, default=str),
+            mimetype="application/json",
+        )
+        respuesta.headers["Content-Disposition"] = 'attachment; filename="questcash-mis-datos.json"'
+        return respuesta
+
+    @api_bp.route("/auth/cuenta", methods=["DELETE"])
+    @jwt_required
+    def api_eliminar_cuenta():
+        """Elimina la cuenta y todo lo que cuelga de ella.
+
+        Exige la contraseña: el token no basta para una operación
+        irreversible, y un dispositivo desatendido no debe poder borrar la
+        cuenta de nadie.
+
+        El borrado es real, no una marca de baja. Es el derecho de cancelación,
+        y la App Store lo exige desde dentro de la aplicación para toda app que
+        permita crear cuenta.
+        """
+        usuario = g.api_usuario
+        data = request.get_json(silent=True) or {}
+        if not verificar_password(usuario.password_hash, data.get("password") or ""):
+            return jsonify({"errors": ["La contraseña no es correcta."]}), 400
+
+        eliminar_cuenta(usuario)
+        db.session.commit()
+        return "", 204
 
     # ----------------- Dashboard -----------------
 
@@ -278,8 +735,8 @@ def register_api(app, csrf, ctx):
             "porcentaje_ingreso_gastado": questy_home.get("porcentaje_ingreso_gastado", 0.0),
         }
 
-        total_objetivo = sum(q.monto_objetivo for q in quests) or 0
-        total_actual = sum(q.monto_actual for q in quests) or 0
+        total_objetivo = float(sum(q.monto_objetivo for q in quests) or 0)
+        total_actual = float(sum(q.monto_actual for q in quests) or 0)
         progreso_global = int(total_actual / total_objetivo * 100) if total_objetivo > 0 else 0
 
         completados = [q for q in quests if q.progreso_porcentaje() >= 100 or q.estatus == "completado"]
@@ -294,7 +751,7 @@ def register_api(app, csrf, ctx):
             .all()
         )
 
-        notificaciones = generar_notificaciones(usuario)
+        notificaciones = [serialize_notificacion_dinamica(item) for item in generar_notificaciones(usuario)]
         rachas = calcular_rachas_usuario(usuario)
 
         insignias_count = UsuarioInsignia.query.filter_by(usuario_id=usuario.id).count()
@@ -328,6 +785,7 @@ def register_api(app, csrf, ctx):
 
     @api_bp.route("/quests", methods=["POST"])
     @jwt_required
+    @idempotente
     def api_crear_quest():
         usuario = g.api_usuario
         data = request.get_json(silent=True) or {}
@@ -338,6 +796,8 @@ def register_api(app, csrf, ctx):
         fecha_limite = (data.get("fecha_limite") or "").strip()
         es_colaborativo = bool(data.get("es_colaborativo"))
         tipo = "colaborativo" if es_colaborativo else "individual"
+        icono_raw = (data.get("icono") or "").strip()
+        icono = icono_raw if icono_raw in ICONOS_META_PERMITIDOS else None
 
         errores, datos = validar_quest_form(
             nombre, monto_objetivo, monto_actual, fecha_limite, descripcion, tipo
@@ -367,6 +827,7 @@ def register_api(app, csrf, ctx):
             usuario_id=usuario.id,
             es_colaborativo=es_colaborativo,
             tipo=tipo,
+            icono=icono,
         )
         db.session.add(nueva_quest)
         db.session.flush()
@@ -447,6 +908,10 @@ def register_api(app, csrf, ctx):
             fecha_creacion=fecha_creacion,
         )
 
+        icono_raw = (data.get("icono") or "").strip()
+        if icono_raw in ICONOS_META_PERMITIDOS:
+            quest.icono = icono_raw
+
         quest.nombre = nombre
         quest.descripcion = descripcion
         quest.monto_objetivo = datos["monto_objetivo_float"]
@@ -498,6 +963,37 @@ def register_api(app, csrf, ctx):
         db.session.commit()
         return "", 204
 
+    def _paginar(consulta, columna_orden, limite_por_omision=50, limite_maximo=200):
+        """Paginación por cursor.
+
+        Se usa cursor y no `offset` porque con offset, insertar una fila
+        mientras alguien pagina desplaza el resto y repite o salta elementos.
+        El cursor es el id de la última fila devuelta: estable pase lo que pase.
+
+        Ningún endpoint paginaba: `/movimientos`, `/gastos` e `/insignias`
+        devolvían todo. Con historial de años, eso es una respuesta que crece
+        sin límite.
+        """
+        try:
+            limite = min(int(request.args.get("limit", limite_por_omision)), limite_maximo)
+        except (TypeError, ValueError):
+            limite = limite_por_omision
+        limite = max(limite, 1)
+
+        cursor = request.args.get("cursor")
+        if cursor:
+            try:
+                consulta = consulta.filter(columna_orden < int(cursor))
+            except (TypeError, ValueError):
+                pass
+
+        # Se pide uno de más para saber si hay página siguiente sin contar todo.
+        filas = consulta.order_by(columna_orden.desc()).limit(limite + 1).all()
+        hay_mas = len(filas) > limite
+        filas = filas[:limite]
+        siguiente = str(getattr(filas[-1], columna_orden.key)) if (hay_mas and filas) else None
+        return filas, {"next_cursor": siguiente, "has_more": hay_mas, "limit": limite}
+
     @api_bp.route("/quests/<int:quest_id>/movimientos", methods=["GET"])
     @jwt_required
     def api_listar_movimientos(quest_id):
@@ -508,16 +1004,17 @@ def register_api(app, csrf, ctx):
         if not usuario_participa_en_quest(usuario, quest):
             return jsonify({"error": "forbidden"}), 403
 
-        movimientos = (
-            Movimiento.query
-            .filter_by(quest_id=quest.id)
-            .order_by(Movimiento.fecha.desc())
-            .all()
+        movimientos, pagina = _paginar(
+            Movimiento.query.filter_by(quest_id=quest.id), Movimiento.id
         )
-        return jsonify({"movimientos": [serialize_movimiento(m) for m in movimientos]})
+        return jsonify({
+            "movimientos": [serialize_movimiento(m) for m in movimientos],
+            **pagina,
+        })
 
     @api_bp.route("/quests/<int:quest_id>/movimientos", methods=["POST"])
     @jwt_required
+    @idempotente
     def api_crear_movimiento(quest_id):
         usuario = g.api_usuario
         quest = _load_quest(quest_id)
@@ -566,6 +1063,19 @@ def register_api(app, csrf, ctx):
     @api_bp.route("/quests/<int:quest_id>/colaboradores", methods=["POST"])
     @jwt_required
     def api_invitar_colaborador(quest_id):
+        """Registra una invitación. NO añade a nadie a la meta.
+
+        Dos problemas del comportamiento anterior:
+
+        1. Consentimiento. Se creaba la participación directamente, así que la
+           persona quedaba dentro de una meta ajena sin aceptar nada y sin
+           poder salirse.
+        2. Enumeración. Respondía "no existe un usuario registrado con ese
+           correo", lo que permitía averiguar si una dirección tenía cuenta.
+
+        Ahora la invitación se registra exista o no la cuenta, y la respuesta
+        es idéntica en los dos casos.
+        """
         usuario = g.api_usuario
         quest = _load_quest(quest_id)
         if quest is None:
@@ -585,49 +1095,226 @@ def register_api(app, csrf, ctx):
             errores.append("El correo es demasiado largo (máximo 150 caracteres).")
         elif not re.match(EMAIL_REGEX, correo):
             errores.append("El correo no tiene un formato válido.")
-
-        usuario_invitado = None
-        if not errores:
-            usuario_invitado = Usuario.query.filter_by(correo=correo).first()
-            if not usuario_invitado:
-                errores.append("No existe un usuario registrado con ese correo.")
-            elif usuario_invitado.id == quest.usuario_id:
-                errores.append("Tú ya eres el creador de este reto.")
-            else:
-                ya_participa = ParticipacionQuest.query.filter_by(
-                    usuario_id=usuario_invitado.id, quest_id=quest.id
-                ).first()
-                if ya_participa:
-                    errores.append("Ese usuario ya participa en este reto.")
-
+        elif indice_ciego(correo) == usuario.correo_bi:
+            errores.append("No puedes invitarte a ti mismo.")
         if errores:
             return jsonify({"errors": errores}), 400
 
-        nueva_part = ParticipacionQuest(usuario_id=usuario_invitado.id, quest_id=quest.id, rol="colaborador")
-        db.session.add(nueva_part)
+        bi = indice_ciego(correo)
+
+        # Si ya participa, se dice — no es enumeración: el creador ya ve a sus
+        # participantes en el listado de la meta.
+        ya_dentro = (
+            ParticipacionQuest.query
+            .join(Usuario, ParticipacionQuest.usuario_id == Usuario.id)
+            .filter(ParticipacionQuest.quest_id == quest.id, Usuario.correo_bi == bi)
+            .first()
+        )
+        if ya_dentro:
+            return jsonify({"errors": ["Esa persona ya participa en este reto."]}), 400
+
+        existente = InvitacionQuest.query.filter_by(
+            quest_id=quest.id, correo_bi=bi, estado=InvitacionQuest.PENDIENTE
+        ).first()
+        if existente:
+            # Reenviar una invitación pendiente no es un error.
+            return jsonify({"invitacion": serialize_invitacion(existente, para_creador=True)}), 200
+
+        invitacion = InvitacionQuest(quest_id=quest.id, invitado_por_id=usuario.id)
+        invitacion.set_correo(correo)
+        db.session.add(invitacion)
         db.session.commit()
 
-        return jsonify({"participacion": serialize_participacion(nueva_part)}), 201
+        return jsonify({"invitacion": serialize_invitacion(invitacion, para_creador=True)}), 201
+
+    @api_bp.route("/quests/<int:quest_id>/invitaciones", methods=["GET"])
+    @jwt_required
+    def api_listar_invitaciones_quest(quest_id):
+        """Invitaciones pendientes de una meta. Solo para el creador."""
+        quest = _load_quest(quest_id)
+        if quest is None:
+            return jsonify({"error": "not_found"}), 404
+        if quest.usuario_id != g.api_usuario.id:
+            return jsonify({"error": "forbidden"}), 403
+
+        pendientes = InvitacionQuest.query.filter_by(
+            quest_id=quest.id, estado=InvitacionQuest.PENDIENTE
+        ).order_by(InvitacionQuest.creado_en.desc()).all()
+        return jsonify({"invitaciones": [serialize_invitacion(i, para_creador=True) for i in pendientes]})
+
+    @api_bp.route("/invitaciones", methods=["GET"])
+    @jwt_required
+    def api_mis_invitaciones():
+        """Invitaciones pendientes dirigidas a mí, buscadas por índice ciego."""
+        usuario = g.api_usuario
+        pendientes = (
+            InvitacionQuest.query
+            .filter_by(correo_bi=usuario.correo_bi, estado=InvitacionQuest.PENDIENTE)
+            .order_by(InvitacionQuest.creado_en.desc())
+            .all()
+        )
+        return jsonify({"invitaciones": [serialize_invitacion(i) for i in pendientes]})
+
+    def _responder_invitacion(invitacion_id, aceptar):
+        usuario = g.api_usuario
+        invitacion = InvitacionQuest.query.get(invitacion_id)
+
+        # Comprobar la propiedad ANTES que el estado: responder distinto según
+        # exista o no la invitación volvería a filtrar información.
+        if invitacion is None or invitacion.correo_bi != usuario.correo_bi:
+            return jsonify({"error": "not_found"}), 404
+        if invitacion.estado != InvitacionQuest.PENDIENTE:
+            return jsonify({"error": "already_answered"}), 409
+
+        invitacion.estado = InvitacionQuest.ACEPTADA if aceptar else InvitacionQuest.RECHAZADA
+        invitacion.respondida_en = datetime.now(timezone.utc)
+
+        if aceptar:
+            ya = ParticipacionQuest.query.filter_by(
+                usuario_id=usuario.id, quest_id=invitacion.quest_id
+            ).first()
+            if not ya:
+                db.session.add(ParticipacionQuest(
+                    usuario_id=usuario.id, quest_id=invitacion.quest_id, rol="colaborador"
+                ))
+        db.session.commit()
+        return jsonify({"invitacion": serialize_invitacion(invitacion)})
+
+    @api_bp.route("/invitaciones/<int:invitacion_id>/aceptar", methods=["POST"])
+    @jwt_required
+    def api_aceptar_invitacion(invitacion_id):
+        return _responder_invitacion(invitacion_id, True)
+
+    @api_bp.route("/invitaciones/<int:invitacion_id>/rechazar", methods=["POST"])
+    @jwt_required
+    def api_rechazar_invitacion(invitacion_id):
+        return _responder_invitacion(invitacion_id, False)
+
+    @api_bp.route("/quests/<int:quest_id>/abandonar", methods=["POST"])
+    @jwt_required
+    def api_abandonar_quest(quest_id):
+        """Salir de una meta colaborativa.
+
+        No existía. Quien entraba a una meta ajena —antes sin ni siquiera
+        aceptar— no tenía forma de salir. Los aportes ya hechos se conservan:
+        son movimientos reales de esa meta, no del participante.
+        """
+        usuario = g.api_usuario
+        quest = _load_quest(quest_id)
+        if quest is None:
+            return jsonify({"error": "not_found"}), 404
+        if quest.usuario_id == usuario.id:
+            return jsonify({"error": "creator_cannot_leave"}), 400
+
+        participacion = ParticipacionQuest.query.filter_by(
+            usuario_id=usuario.id, quest_id=quest.id
+        ).first()
+        if participacion is None:
+            return jsonify({"error": "not_found"}), 404
+
+        db.session.delete(participacion)
+        db.session.commit()
+        return "", 204
 
     # ----------------- Gastos -----------------
+
+    def _rango_periodo(period):
+        """Devuelve (inicio, fin, inicio_anterior, fin_anterior) para el
+        período pedido, comparado contra el período inmediato anterior de
+        igual duración (semana pasada / mes pasado / año pasado)."""
+        hoy = date.today()
+        if period == "week":
+            inicio = hoy - timedelta(days=hoy.weekday())
+            fin_anterior = inicio - timedelta(days=1)
+            inicio_anterior = fin_anterior - timedelta(days=6)
+        elif period == "year":
+            inicio = hoy.replace(month=1, day=1)
+            inicio_anterior = inicio.replace(year=inicio.year - 1)
+            fin_anterior = inicio - timedelta(days=1)
+        else:
+            inicio = hoy.replace(day=1)
+            fin_anterior = inicio - timedelta(days=1)
+            inicio_anterior = fin_anterior.replace(day=1)
+        return inicio, hoy, inicio_anterior, fin_anterior
 
     @api_bp.route("/gastos", methods=["GET"])
     @jwt_required
     def api_listar_gastos():
         usuario = g.api_usuario
-        hoy = date.today()
-        inicio_mes = hoy.replace(day=1)
-        gastos = (
+        period = request.args.get("period", "month")
+        if period not in ("week", "month", "year"):
+            period = "month"
+
+        inicio, fin, inicio_anterior, fin_anterior = _rango_periodo(period)
+
+        # Los agregados del período (total, categorías, comparación con el
+        # período anterior) se calculan sobre TODOS los gastos: paginar eso
+        # daría un total falso. Lo que se pagina es la lista que se muestra.
+        gastos_todos = (
             Gasto.query
-            .filter(Gasto.usuario_id == usuario.id, Gasto.fecha >= inicio_mes, Gasto.fecha <= hoy)
+            .filter(Gasto.usuario_id == usuario.id, Gasto.fecha >= inicio, Gasto.fecha <= fin)
             .order_by(Gasto.fecha.desc())
             .all()
         )
-        total_mes = sum(gasto.monto for gasto in gastos) or 0
-        return jsonify({"gastos": [serialize_gasto(gasto) for gasto in gastos], "total_mes": total_mes})
+        gastos_pagina, pagina = _paginar(
+            Gasto.query.filter(
+                Gasto.usuario_id == usuario.id, Gasto.fecha >= inicio, Gasto.fecha <= fin
+            ),
+            Gasto.id,
+        )
+        gastos = gastos_todos
+        # float() en el borde de lectura: de aquí en adelante son cifras de
+        # presentación (porcentajes, variaciones), no aritmética de saldo.
+        total_periodo = float(sum(gasto.monto for gasto in gastos) or 0)
+
+        total_anterior = (
+            db.session.query(db.func.sum(Gasto.monto))
+            .filter(
+                Gasto.usuario_id == usuario.id,
+                Gasto.fecha >= inicio_anterior,
+                Gasto.fecha <= fin_anterior,
+            )
+            .scalar() or 0
+        )
+        total_anterior = float(total_anterior)
+        variacion_pct = (
+            ((total_periodo - total_anterior) / total_anterior * 100) if total_anterior > 0 else 0.0
+        )
+
+        por_categoria = {}
+        color_por_categoria = {}
+        for gasto in gastos:
+            nombre = gasto.categoria.nombre if gasto.categoria else "Otros"
+            por_categoria[nombre] = por_categoria.get(nombre, 0.0) + float(gasto.monto or 0)
+            if gasto.categoria and gasto.categoria.color:
+                color_por_categoria[nombre] = gasto.categoria.color
+
+        categorias = []
+        for idx, (nombre, monto) in enumerate(sorted(por_categoria.items(), key=lambda item: -item[1])):
+            color = color_por_categoria.get(nombre) or CATEGORY_COLOR_PALETTE[idx % len(CATEGORY_COLOR_PALETTE)]
+            porcentaje = round((monto / total_periodo * 100), 1) if total_periodo > 0 else 0.0
+            categorias.append({"nombre": nombre, "monto": monto, "porcentaje": porcentaje, "color": color})
+
+        return jsonify({
+            "gastos": [serialize_gasto(gasto) for gasto in gastos_pagina],
+            **pagina,
+            "period": period,
+            "total_periodo": total_periodo,
+            "categorias": categorias,
+            "variacion_pct_vs_periodo_anterior": round(variacion_pct, 1),
+        })
+
+    @api_bp.route("/categorias-gasto", methods=["GET"])
+    @jwt_required
+    def api_listar_categorias_gasto():
+        categorias = gastos_svc.visibles_para(g.api_usuario)
+        return jsonify({
+            "categorias": [{"id": c.id, "nombre": c.nombre, "color": c.color} for c in categorias]
+        })
 
     @api_bp.route("/gastos", methods=["POST"])
     @jwt_required
+    @idempotente
     def api_crear_gasto():
         usuario = g.api_usuario
         data = request.get_json(silent=True) or {}
@@ -642,7 +1329,7 @@ def register_api(app, csrf, ctx):
         if errores:
             return jsonify({"errors": errores}), 400
 
-        categoria = obtener_o_crear_categoria_gasto(categoria_nombre)
+        categoria = obtener_o_crear_categoria_gasto(categoria_nombre, usuario)
 
         es_hormiga = es_hormiga_flag
         if not es_hormiga_flag:
@@ -672,7 +1359,7 @@ def register_api(app, csrf, ctx):
     @jwt_required
     def api_listar_insignias():
         usuario = g.api_usuario
-        todas_db = Insignia.query.order_by(Insignia.rareza, Insignia.nombre).all()
+        todas_db = Insignia.query.order_by(Insignia.rareza, Insignia.nombre).all()  # catálogo fijo y corto
 
         insignias_limpias = []
         codigos_vistos = set()
@@ -702,9 +1389,35 @@ def register_api(app, csrf, ctx):
     @api_bp.route("/notificaciones", methods=["GET"])
     @jwt_required
     def api_notificaciones():
-        return jsonify({"notificaciones": generar_notificaciones(g.api_usuario)})
+        usuario = g.api_usuario
+        persistidas = (
+            Notificacion.query
+            .filter_by(usuario_id=usuario.id)
+            .order_by(Notificacion.fecha_creacion.desc())
+            .limit(50)
+            .all()
+        )
+        dinamicas = generar_notificaciones(usuario)
 
-    # ----------------- Perfil (solo lectura por ahora) -----------------
+        items = [serialize_notificacion(n) for n in persistidas]
+        items += [serialize_notificacion_dinamica(item) for item in dinamicas]
+        no_leidas_count = sum(1 for n in persistidas if not n.leida)
+
+        return jsonify({"notificaciones": items, "no_leidas_count": no_leidas_count})
+
+    @api_bp.route("/notificaciones/<int:notif_id>/leer", methods=["POST"])
+    @jwt_required
+    def api_marcar_notificacion_leida(notif_id):
+        usuario = g.api_usuario
+        notif = Notificacion.query.get(notif_id)
+        if notif is None or notif.usuario_id != usuario.id:
+            return jsonify({"error": "not_found"}), 404
+
+        notif.leida = True
+        db.session.commit()
+        return jsonify({"notificacion": serialize_notificacion(notif)})
+
+    # ----------------- Perfil -----------------
 
     @api_bp.route("/perfil", methods=["GET"])
     @jwt_required
@@ -714,6 +1427,39 @@ def register_api(app, csrf, ctx):
             "user": serialize_user(usuario),
             "rank_state": _augment_rank_state(calcular_estado_rango_perfil(usuario.puntos_totales or 0)),
         })
+
+    @api_bp.route("/perfil", methods=["PATCH"])
+    @jwt_required
+    def api_actualizar_perfil():
+        usuario = g.api_usuario
+        data = request.get_json(silent=True) or {}
+
+        nombre = (data.get("nombre") if "nombre" in data else usuario.nombre) or ""
+        nombre = nombre.strip()
+        alias = (data.get("alias") or "").strip() if "alias" in data else usuario.alias
+
+        errores = []
+        if not nombre:
+            errores.append("El nombre es obligatorio.")
+        elif len(nombre) > 100:
+            errores.append("El nombre es demasiado largo (máximo 100 caracteres).")
+        if alias and len(alias) > 50:
+            errores.append("El alias no puede superar 50 caracteres.")
+
+        if errores:
+            return jsonify({"errors": errores}), 400
+
+        usuario.nombre = nombre
+        usuario.alias = alias or None
+        if "notif_ia" in data:
+            usuario.notif_ia = bool(data["notif_ia"])
+        if "notif_fechas" in data:
+            usuario.notif_fechas = bool(data["notif_fechas"])
+        if "notif_progreso" in data:
+            usuario.notif_progreso = bool(data["notif_progreso"])
+
+        db.session.commit()
+        return jsonify({"user": serialize_user(usuario)})
 
     app.register_blueprint(api_bp)
     csrf.exempt(api_bp)

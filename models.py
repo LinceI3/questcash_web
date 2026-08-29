@@ -1,18 +1,144 @@
 # models.py
+from decimal import Decimal
+
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import declared_attr
+from sqlalchemy.types import TypeDecorator
 from datetime import datetime, date
+
+from crypto_utils import cifrar, descifrar, indice_ciego
 
 db = SQLAlchemy()
 
+# Tipo de todos los importes de dinero.
+#
+# Antes eran db.Float, que en Postgres es `double precision`: binario, incapaz
+# de representar exactamente la mayoría de los decimales, y con error que se
+# ACUMULA en cada suma sobre `monto_actual`. En una aplicación cuyo texto
+# principal es "te faltan $X para tu meta", eso produce centavos que aparecen y
+# desaparecen. Numeric es decimal exacto y no acumula error.
+#
+# 14 dígitos con 2 decimales: hasta 999,999,999,999.99 — muy por encima del
+# tope de 1,000,000,000 que imponen los validadores.
+#
+# SQLAlchemy devuelve estas columnas como decimal.Decimal. Nunca se deben
+# mezclar con float en una operación aritmética (Python lanza TypeError):
+# conviértase explícitamente con float() en el código de análisis, o manténgase
+# en Decimal en la ruta que mueve dinero.
+Dinero = db.Numeric(14, 2)
+CERO = Decimal("0.00")
 
-class Usuario(db.Model):
+
+class MarcasDeTiempo:
+    """Cuándo se creó y cuándo se tocó por última vez cada fila.
+
+    Hacen falta para tres cosas que hoy no se pueden hacer:
+
+      - Sincronización incremental: un cliente móvil que vuelve tras estar sin
+        red necesita pedir "lo que cambió desde X" en vez de recargarlo todo.
+      - Investigar un incidente: sin saber cuándo cambió una fila no se puede
+        reconstruir qué pasó, que es justo lo que exige la obligación de
+        notificar una vulneración de datos.
+      - Retención: no se puede aplicar una política de conservación sobre datos
+        que no dicen cuándo nacieron.
+
+    Se usa `server_default=now()` para que las filas que ya existen queden con
+    un valor en vez de NULL al aplicar la migración, y `onupdate` para que
+    `actualizado_en` se mantenga solo sin que cada vista tenga que acordarse.
+    """
+
+    @declared_attr
+    def creado_en(cls):
+        return db.Column(
+            db.DateTime(timezone=True),
+            nullable=False,
+            server_default=db.func.now(),
+        )
+
+    @declared_attr
+    def actualizado_en(cls):
+        return db.Column(
+            db.DateTime(timezone=True),
+            nullable=False,
+            server_default=db.func.now(),
+            onupdate=db.func.now(),
+        )
+
+
+class TextoCifrado(TypeDecorator):
+    """Columna que se guarda cifrada con AES-256-GCM y se lee en claro.
+
+    El cifrado ocurre en el borde de SQLAlchemy: `process_bind_param` corre
+    justo antes de mandar el valor a la base de datos y `process_result_value`
+    justo después de leerlo. Para el resto de la aplicación —vistas, API,
+    plantillas— el atributo se comporta como un `String` normal; lo que cambia
+    es lo que queda escrito en disco.
+
+    Ver `crypto_utils.py` para el formato del sobre (`qc1:...`) y el manejo de
+    claves.
+    """
+
+    impl = db.String
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        return cifrar(value)
+
+    def process_result_value(self, value, dialect):
+        return descifrar(value)
+
+
+class Usuario(MarcasDeTiempo, db.Model):
     __tablename__ = "usuarios"
 
     id = db.Column(db.Integer, primary_key=True)
-    nombre = db.Column(db.String(100), nullable=False)
-    correo = db.Column(db.String(120), unique=True, nullable=False)
+
+    # --- Datos personales: cifrados en reposo (ver TextoCifrado) -------------
+    # La longitud declarada es la del CRIPTOGRAMA, no la del dato: el sobre
+    # AES-GCM en base64url ocupa aproximadamente 4/3 del original más 40 bytes
+    # de nonce y tag. Se declara 512 con holgura.
+    nombre = db.Column(TextoCifrado(512), nullable=False)
+    correo = db.Column(TextoCifrado(512), nullable=False)
+
+    # Índice ciego del correo: HMAC-SHA256 determinista del correo normalizado.
+    # Es por donde se busca al hacer login (el correo cifrado no se puede
+    # consultar porque cada escritura usa un nonce distinto) y donde vive
+    # ahora la restricción de unicidad de la cuenta.
+    correo_bi = db.Column(db.String(64), unique=True, index=True, nullable=True)
+
     password_hash = db.Column(db.String(255), nullable=False)
     fecha_registro = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Versión de los tokens de acceso emitidos para esta cuenta.
+    #
+    # Un access token lleva dentro el valor que tenía al emitirse. Incrementar
+    # esta columna invalida de golpe TODOS los tokens vivos del usuario, sin
+    # tener que buscarlos ni guardarlos: al validar se compara y no coinciden.
+    # Es lo que hace posible "cerrar sesión en todos los dispositivos" y lo que
+    # debe hacer un cambio de contraseña.
+    # server_default además de default: sin él, añadir esta columna NOT NULL
+    # sobre una tabla con filas falla — Postgres no sabe qué poner en las
+    # que ya existen, y el `default` de Python solo aplica a las nuevas.
+    token_version = db.Column(
+        db.Integer, nullable=False, default=1, server_default=db.text("1")
+    )
+
+    # --- Búsqueda por correo ------------------------------------------------
+    @staticmethod
+    def por_correo(correo):
+        """Sustituye a `Usuario.query.filter_by(correo=...)`, que dejó de
+        funcionar al cifrar la columna. Busca por el índice ciego."""
+        bi = indice_ciego(correo)
+        if not bi:
+            return None
+        return Usuario.query.filter_by(correo_bi=bi).first()
+
+    def set_correo(self, correo):
+        """Asigna el correo y mantiene sincronizado su índice ciego. Usar
+        siempre esto en vez de `usuario.correo = ...`."""
+        normalizado = (correo or "").strip().lower()
+        self.correo = normalizado
+        self.correo_bi = indice_ciego(normalizado)
 
     # 🔸 Puntos acumulados del usuario
     puntos_totales = db.Column(db.Integer, nullable=False, default=0)
@@ -27,7 +153,8 @@ class Usuario(db.Model):
     insignias_usuario = db.relationship("UsuarioInsignia", back_populates="usuario", lazy=True)
 
     # --- Perfil del usuario ---
-    alias = db.Column(db.String(50), nullable=True)
+    # El alias es un dato personal más: también va cifrado en reposo.
+    alias = db.Column(TextoCifrado(512), nullable=True)
 
     # Foto de perfil (nombre del archivo almacenado en /static/uploads/profiles)
     foto_perfil = db.Column(db.String(255), nullable=True)
@@ -38,14 +165,106 @@ class Usuario(db.Model):
     notif_progreso = db.Column(db.Boolean, nullable=False, default=True)
 
 
-class Quest(db.Model):
+class Sesion(MarcasDeTiempo, db.Model):
+    """Un refresh token vivo, es decir, un dispositivo con sesión iniciada.
+
+    Antes la API emitía un único JWT de 30 días sin `jti`, sin lista de
+    revocación y sin forma de renovarlo. Cerrar sesión solo borraba el token
+    del dispositivo: seguía siendo válido un mes para quien lo tuviera, y
+    cambiar la contraseña tampoco lo invalidaba. Un token capturado daba un mes
+    de acceso completo a los datos financieros del usuario.
+
+    El modelo ahora es el estándar de dos tokens:
+
+      - ACCESS token, corto (60 min por omisión). No se guarda en ninguna
+        parte: se valida por firma, caducidad y `token_version`.
+      - REFRESH token, largo (30 días), que SÍ vive aquí y se puede revocar.
+        Rota en cada uso: al canjearlo se marca el anterior como usado y se
+        emite uno nuevo. Si alguien roba un refresh y lo canjea, el legítimo
+        deja de funcionar en su siguiente intento — el robo se nota.
+
+    Del token solo se guarda su hash. Igual que con las contraseñas: quien lea
+    esta tabla no puede suplantar a nadie con lo que encuentre dentro.
+    """
+
+    __tablename__ = "sesiones"
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+
+    # SHA-256 del refresh token. Determinista para poder buscarlo, e inútil
+    # para quien lo lea.
+    token_hash = db.Column(db.String(64), unique=True, index=True, nullable=False)
+
+    # Etiqueta legible del dispositivo, para que el usuario reconozca sus
+    # sesiones en una futura pantalla de "dispositivos conectados".
+    dispositivo = db.Column(db.String(120), nullable=True)
+
+    expira_en = db.Column(db.DateTime(timezone=True), nullable=False)
+    ultimo_uso = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    # Motivo de revocación: logout | rotacion | cierre_total | expirada.
+    # Se conserva la fila revocada en vez de borrarla: si un refresh ya rotado
+    # vuelve a aparecer, es señal de robo y hay con qué detectarlo.
+    revocada_en = db.Column(db.DateTime(timezone=True), nullable=True)
+    motivo_revocacion = db.Column(db.String(30), nullable=True)
+
+    usuario = db.relationship("Usuario")
+
+    __table_args__ = (
+        db.Index("ix_sesiones_usuario", "usuario_id"),
+    )
+
+    def esta_viva(self, ahora):
+        return self.revocada_en is None and self.expira_en > ahora
+
+
+class TokenCorreo(MarcasDeTiempo, db.Model):
+    """Token de un solo uso enviado por correo (recuperación de contraseña).
+
+    No se usa un token firmado tipo itsdangerous a propósito: un token firmado
+    es válido hasta que caduca y NO se puede invalidar antes. Aquí hace falta lo
+    contrario — que deje de servir en cuanto se usa, y que pedir uno nuevo
+    anule el anterior. Eso exige estado, y el estado vive aquí.
+
+    Del token solo se guarda su SHA-256, igual que con los refresh y las
+    contraseñas: quien lea esta tabla no puede restablecer la cuenta de nadie.
+    """
+
+    __tablename__ = "tokens_correo"
+
+    RECUPERACION = "recuperacion"
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+    tipo = db.Column(db.String(30), nullable=False, default=RECUPERACION)
+
+    token_hash = db.Column(db.String(64), unique=True, index=True, nullable=False)
+    expira_en = db.Column(db.DateTime(timezone=True), nullable=False)
+    usado_en = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    # Desde dónde se pidió. Sirve para investigar si alguien reporta que le
+    # llegan correos de recuperación que no pidió.
+    ip_solicitud = db.Column(db.String(45), nullable=True)
+
+    usuario = db.relationship("Usuario")
+
+    __table_args__ = (
+        db.Index("ix_tokens_correo_usuario", "usuario_id", "tipo"),
+    )
+
+    def esta_vivo(self, ahora):
+        return self.usado_en is None and self.expira_en > ahora
+
+
+class Quest(MarcasDeTiempo, db.Model):
     __tablename__ = "quests"
 
     id = db.Column(db.Integer, primary_key=True)
     nombre = db.Column(db.String(100), nullable=False)
     descripcion = db.Column(db.Text, nullable=True)
-    monto_objetivo = db.Column(db.Float, nullable=False)
-    monto_actual = db.Column(db.Float, nullable=False, default=0.0)
+    monto_objetivo = db.Column(Dinero, nullable=False)
+    monto_actual = db.Column(Dinero, nullable=False, default=CERO)
     fecha_limite = db.Column(db.Date, nullable=False)
     # 🔸 Fecha de creación del reto
     fecha_creacion = db.Column(db.Date, nullable=False, default=date.today)
@@ -62,6 +281,9 @@ class Quest(db.Model):
 
     # individual o colaborativo
     tipo = db.Column(db.String(20), nullable=False, default="individual")
+
+    # Ícono elegido por el usuario (nombre de Ionicons), usado por la app móvil
+    icono = db.Column(db.String(30), nullable=True)
 
     # FK al usuario creador del reto
     usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
@@ -83,32 +305,54 @@ class Quest(db.Model):
         cascade="all, delete-orphan",
     )
 
+    __table_args__ = (
+        db.Index("ix_quests_usuario", "usuario_id"),
+    )
+
     def progreso_porcentaje(self):
-        if self.monto_objetivo <= 0:
+        objetivo = self.monto_objetivo or CERO
+        if objetivo <= 0:
             return 0
-        return min(int((self.monto_actual / self.monto_objetivo) * 100), 100)
+        actual = self.monto_actual or CERO
+        return min(int((actual / objetivo) * 100), 100)
 
 
-class Movimiento(db.Model):
+class Movimiento(MarcasDeTiempo, db.Model):
     __tablename__ = "movimientos"
 
     id = db.Column(db.Integer, primary_key=True)
     tipo = db.Column(db.String(20), nullable=False)  # 'aporte' o 'retiro'
-    monto = db.Column(db.Float, nullable=False)
+    monto = db.Column(Dinero, nullable=False)
     fecha = db.Column(db.DateTime, default=datetime.utcnow)
-    nota = db.Column(db.Text, nullable=True)
+    # La nota describe en texto libre en qué se ahorró o se retiró dinero:
+    # es detalle financiero del usuario, va cifrada en reposo.
+    nota = db.Column(TextoCifrado(2048), nullable=True)
     # Categoría del movimiento (comida, transporte, viaje, etc.)
     categoria = db.Column(db.String(50), nullable=True, default="general")
 
-    # Relaciones
-    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+    # Relaciones.
+    #
+    # usuario_id es NULLABLE a propósito. Cuando alguien elimina su cuenta, sus
+    # aportes a metas COLABORATIVAS de otras personas no se borran: se
+    # desligan. Borrarlos dejaría la meta con un saldo que no cuadra con su
+    # historial y reduciría el progreso de gente que no ha pedido nada. Poner
+    # el vínculo a NULL cumple el derecho de cancelación —el movimiento deja de
+    # ser atribuible a una persona— sin descuadrar a terceros.
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=True)
     quest_id = db.Column(db.Integer, db.ForeignKey("quests.id"), nullable=False)
 
     usuario = db.relationship("Usuario")
     quest = db.relationship("Quest", back_populates="movimientos")
 
+    __table_args__ = (
+        # El dashboard, las rachas y las estadísticas filtran por usuario y
+        # ordenan por fecha descendente. Este índice cubre las tres.
+        db.Index("ix_movimientos_usuario_fecha", "usuario_id", db.text("fecha DESC")),
+        db.Index("ix_movimientos_quest", "quest_id"),
+    )
 
-class ParticipacionQuest(db.Model):
+
+class ParticipacionQuest(MarcasDeTiempo, db.Model):
     __tablename__ = "participaciones_quest"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -123,10 +367,63 @@ class ParticipacionQuest(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint("usuario_id", "quest_id", name="uq_usuario_quest"),
+        db.Index("ix_participaciones_quest", "quest_id"),
     )
 
 
-class Insignia(db.Model):
+class InvitacionQuest(MarcasDeTiempo, db.Model):
+    """Invitación a colaborar en una meta, pendiente de aceptación.
+
+    Antes, invitar creaba directamente la `ParticipacionQuest`: la persona
+    quedaba dentro de una meta ajena sin aceptar nada, sin enterarse y sin
+    poder salirse —no existía forma de abandonar—. Y el endpoint respondía
+    "no existe un usuario con ese correo", lo que lo convertía en un oráculo
+    para averiguar si una dirección tenía cuenta en QuestCash.
+
+    Con este modelo, invitar solo registra una intención. El invitado la ve y
+    decide. Y como la invitación se crea exista o no la cuenta, la respuesta es
+    siempre la misma y deja de revelar nada.
+
+    El correo se guarda cifrado —para poder mostrarle al creador a quién
+    invitó— junto a su índice ciego, que es por donde el invitado encuentra lo
+    que le corresponde. Igual que en `usuarios`: ver crypto_utils.py.
+    """
+
+    __tablename__ = "invitaciones_quest"
+
+    PENDIENTE = "pendiente"
+    ACEPTADA = "aceptada"
+    RECHAZADA = "rechazada"
+    CANCELADA = "cancelada"
+
+    id = db.Column(db.Integer, primary_key=True)
+    quest_id = db.Column(db.Integer, db.ForeignKey("quests.id"), nullable=False)
+    invitado_por_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+
+    correo = db.Column(TextoCifrado(512), nullable=False)
+    correo_bi = db.Column(db.String(64), index=True, nullable=False)
+
+    estado = db.Column(db.String(20), nullable=False, default=PENDIENTE, server_default=PENDIENTE)
+    respondida_en = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    quest = db.relationship("Quest")
+    invitado_por = db.relationship("Usuario")
+
+    __table_args__ = (
+        # Una sola invitación viva por meta y correo. El estado forma parte de
+        # la clave para que rechazar y volver a invitar siga siendo posible.
+        db.UniqueConstraint("quest_id", "correo_bi", "estado", name="uq_invitacion_viva"),
+        db.Index("ix_invitaciones_correo_bi", "correo_bi"),
+        db.Index("ix_invitaciones_quest", "quest_id"),
+    )
+
+    def set_correo(self, correo):
+        normalizado = (correo or "").strip().lower()
+        self.correo = normalizado
+        self.correo_bi = indice_ciego(normalizado)
+
+
+class Insignia(MarcasDeTiempo, db.Model):
     __tablename__ = "insignias"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -139,7 +436,7 @@ class Insignia(db.Model):
     usuarios = db.relationship("UsuarioInsignia", back_populates="insignia", lazy=True)
 
 
-class UsuarioInsignia(db.Model):
+class UsuarioInsignia(MarcasDeTiempo, db.Model):
     __tablename__ = "usuarios_insignias"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -152,25 +449,48 @@ class UsuarioInsignia(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint("usuario_id", "insignia_id", name="uq_usuario_insignia"),
+        db.Index("ix_usuarios_insignias_insignia", "insignia_id"),
     )
 
    
 
-class CategoriaGasto(db.Model):
+class CategoriaGasto(MarcasDeTiempo, db.Model):
     __tablename__ = "categorias_gasto"
 
     id = db.Column(db.Integer, primary_key=True)
-    nombre = db.Column(db.String(50), nullable=False, unique=True)
-    tipo = db.Column(db.String(20))  # opcional: 'fijo', 'variable', etc.
-    color = db.Column(db.String(20))  # opcional, para usar en gráficas/chips
+    nombre = db.Column(db.String(50), nullable=False)
 
+    # Dueño de la categoría. NULL = categoría del sistema, común a todo el
+    # mundo y de solo lectura.
+    #
+    # Antes esta tabla era global y escribible por cualquiera: el nombre venía
+    # del cliente sin lista blanca y se servía entero a todos los usuarios. Un
+    # usuario podía hacer que los demás vieran texto que él eligió, y la tabla
+    # crecía sin límite con una petición por categoría inventada.
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=True)
+
+    tipo = db.Column(db.String(20))   # opcional: 'fijo', 'variable', etc.
+    color = db.Column(db.String(20))  # opcional, para gráficas y chips
+
+    usuario = db.relationship("Usuario")
     gastos = db.relationship("Gasto", back_populates="categoria", lazy=True)
 
+    __table_args__ = (
+        # Unicidad POR DUEÑO, no global: dos personas pueden tener cada una su
+        # categoría "Mascotas" sin pisarse.
+        db.UniqueConstraint("usuario_id", "nombre", name="uq_categoria_por_usuario"),
+        db.Index("ix_categorias_usuario", "usuario_id"),
+    )
+
+    @property
+    def es_del_sistema(self) -> bool:
+        return self.usuario_id is None
+
     def __repr__(self):
-        return f"<CategoriaGasto {self.nombre}>"
+        return f"<CategoriaGasto {self.nombre} usuario={self.usuario_id}>"
 
 
-class Gasto(db.Model):
+class Gasto(MarcasDeTiempo, db.Model):
     __tablename__ = "gastos"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -183,8 +503,10 @@ class Gasto(db.Model):
         db.Integer, db.ForeignKey("categorias_gasto.id"), nullable=False
     )
 
-    monto = db.Column(db.Float, nullable=False)
-    descripcion = db.Column(db.String(200))
+    monto = db.Column(Dinero, nullable=False)
+    # Descripción del gasto ("consulta médica", "pago del abogado"): puede
+    # revelar hábitos y datos de salud o legales. Cifrada en reposo.
+    descripcion = db.Column(TextoCifrado(1024))
     fecha = db.Column(db.Date, nullable=False, default=date.today)
     metodo_pago = db.Column(db.String(30))  # ej. 'efectivo', 'tarjeta', 'transferencia'
 
@@ -194,5 +516,88 @@ class Gasto(db.Model):
     usuario = db.relationship("Usuario", backref="gastos")
     categoria = db.relationship("CategoriaGasto", back_populates="gastos")
 
+    __table_args__ = (
+        db.Index("ix_gastos_usuario_fecha", "usuario_id", db.text("fecha DESC")),
+        db.Index("ix_gastos_categoria", "categoria_id"),
+    )
+
     def __repr__(self):
         return f"<Gasto {self.monto} {self.categoria_id} {self.fecha}>"
+
+
+class ClaveIdempotencia(MarcasDeTiempo, db.Model):
+    """Respuesta ya emitida para una operación que el cliente puede repetir.
+
+    El bloqueo de fila arregló los aportes PERDIDOS. No arregla los
+    DUPLICADOS: un doble toque en el móvil o un reintento tras un timeout
+    envían dos peticiones que, desde el servidor, son dos operaciones legítimas
+    e indistinguibles. El resultado es un aporte cobrado dos veces.
+
+    La única forma de distinguirlas es que el cliente diga "esta es la misma
+    operación que la anterior", y eso es una cabecera `Idempotency-Key`: un
+    identificador que genera al preparar la operación y reutiliza en cada
+    reintento. Si la clave ya se usó, se devuelve la respuesta guardada en vez
+    de ejecutar de nuevo.
+
+    La clave se guarda junto al usuario y al endpoint: una clave repetida entre
+    usuarios distintos, o entre operaciones distintas, no debe colisionar.
+
+    Las filas caducan; conviene una limpieza periódica de las expiradas cuando
+    exista un planificador de tareas.
+    """
+
+    __tablename__ = "claves_idempotencia"
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+    clave = db.Column(db.String(128), nullable=False)
+    endpoint = db.Column(db.String(120), nullable=False)
+
+    codigo_http = db.Column(db.Integer, nullable=False)
+    respuesta = db.Column(db.Text, nullable=False)
+    expira_en = db.Column(db.DateTime(timezone=True), nullable=False)
+
+    usuario = db.relationship("Usuario")
+
+    __table_args__ = (
+        # La unicidad es lo que hace el trabajo: dos peticiones simultáneas con
+        # la misma clave compiten por insertar, y la segunda choca contra esta
+        # restricción en vez de ejecutar la operación.
+        db.UniqueConstraint("usuario_id", "endpoint", "clave", name="uq_idempotencia"),
+    )
+
+
+class Notificacion(MarcasDeTiempo, db.Model):
+    """Notificaciones persistidas, disparadas por eventos reales (meta
+    completada, insignia nueva, aporte de un colaborador). Las notificaciones
+    de reglas dinámicas (recordatorios de vencimiento, consejos de gasto)
+    siguen generándose al vuelo en generar_notificaciones() y no se guardan
+    aquí, para no duplicar filas cada vez que se recalculan."""
+    __tablename__ = "notificaciones"
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+
+    # meta_completada | aporte_colaborador | insignia_nueva
+    tipo = db.Column(db.String(30), nullable=False)
+
+    titulo = db.Column(db.String(100), nullable=False)
+    mensaje = db.Column(db.Text, nullable=False)
+    icono = db.Column(db.String(30), nullable=True)
+    color = db.Column(db.String(20), nullable=True)
+
+    leida = db.Column(db.Boolean, nullable=False, default=False)
+
+    quest_id = db.Column(db.Integer, db.ForeignKey("quests.id"), nullable=True)
+
+    fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+
+    usuario = db.relationship("Usuario")
+    quest = db.relationship("Quest")
+
+    __table_args__ = (
+        db.Index("ix_notificaciones_usuario_fecha", "usuario_id", db.text("fecha_creacion DESC")),
+    )
+
+    def __repr__(self):
+        return f"<Notificacion {self.tipo} usuario={self.usuario_id}>"
