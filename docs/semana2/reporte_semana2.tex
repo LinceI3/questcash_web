@@ -379,8 +379,7 @@ HTTP/1.1 200 OK
 Content-Type: application/json
 Content-Length: 202
 
-{"token":"REDACTADO-VALOR-DE-PRUEBA
-LCJleHAiOjE3ODk1MTgzNTF9.NyrifCFB8aGz-iEx3RF6r7Zo9dh0MN3vvnSEhoFh91s",
+{"token":"<TOKEN-REDACTADO>",
  "user":{"correo":"armando@questcash.mx","id":1}}
 \end{lstlisting}
 \end{consola}
@@ -602,7 +601,7 @@ almacenado en la base de datos, que sí puede invalidarse al cerrar sesión o an
  P0 - LOGIN con credenciales validas => devuelve JWT (200)
 ========================================================
 HTTP/1.1 200 OK
-{"token":"REDACTADO-VALOR-DE-PRUEBA","user":{"correo":"armando@questcash.mx","id":1}}
+{"token":"<TOKEN-REDACTADO>","user":{"correo":"armando@questcash.mx","id":1}}
 
 ========================================================
  P0b - LOGIN con contrasena incorrecta => 401 invalid_credentials

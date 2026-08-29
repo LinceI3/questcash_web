@@ -14,7 +14,7 @@ HTTP/1.1 200 OK
 Content-Type: application/json
 Content-Length: 202
 
-{"token":"eyJ<TOKEN-REDACTADO-EN-LA-EVIDENCIA>","user":{"correo":"armando@questcash.mx","id":1}}
+{"token":"<TOKEN-REDACTADO>","user":{"correo":"armando@questcash.mx","id":1}}
 
 ========================================================
  P0b - LOGIN con contrasena incorrecta => 401 invalid_credentials
