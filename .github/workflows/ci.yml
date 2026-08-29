@@ -1,45 +1,139 @@
-name: CI/CD QuestCash
+name: CI
 
 on:
   push:
     branches: ["main"]
+  pull_request:
 
 jobs:
-  ci_pipeline:
+  # ---------------------------------------------------------------------------
+  #  Secretos: lo primero, porque si algo se filtró da igual que los tests pasen
+  # ---------------------------------------------------------------------------
+  secretos:
+    name: Detección de secretos
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # gitleaks necesita el historial completo
+      - name: Buscar secretos en el código y en el historial
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  #  Pruebas contra PostgreSQL REAL
+  # ---------------------------------------------------------------------------
+  pruebas:
+    name: Pruebas
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Los tests necesitan Postgres de verdad: Numeric exacto,
+        # SELECT ... FOR UPDATE y las restricciones UNIQUE que sostienen la
+        # idempotencia no existen o se comportan distinto en SQLite.
+        image: postgres:15
+        env:
+          POSTGRES_USER: questcash
+          POSTGRES_PASSWORD: questcash
+          POSTGRES_DB: questcash_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     env:
-      PYTHONPATH: .
+      TEST_DATABASE_URL: postgresql://questcash:questcash@127.0.0.1:5432/questcash_test
+      SECRET_KEY: clave-de-ci-no-usar-fuera
+      JWT_SECRET_KEY: clave-jwt-de-ci
+      DATA_ENC_KEY: REDACTADO-VALOR-DE-PRUEBA
+      BLIND_INDEX_KEY: REDACTADO-VALOR-DE-PRUEBA
 
     steps:
-    - name: Clonar repositorio
-      uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Configurar Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.10"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"     # la misma del contenedor
+          cache: pip
 
-    - name: Instalar dependencias
-      run: |
-        pip install -r requirements.txt
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
 
-    - name: Ejecutar tests
-      run: |
-        echo "Ejecutando pruebas automatizadas..."
-        pytest
+      - name: Comprobar que compila
+        run: python -m compileall -q app.py api.py models.py correo.py rate_limit.py
 
-    - name: Build Docker image
-      run: |
-        echo "Construyendo imagen Docker..."
-        docker build -t questcash .
+      - name: Pruebas
+        run: pytest -q --tb=short
 
-    - name: Simulación de Deploy
-      run: |
-        echo "🚀 Desplegando aplicación..."
-        sleep 3
-        echo "Aplicación desplegada correctamente "
+      - name: Vulnerabilidades conocidas en las dependencias
+        run: |
+          pip install pip-audit
+          pip-audit --requirement requirements.txt --strict
 
-    - name: Finalización
-      run: |
-        echo "Pipeline CI/CD completado correctamente "
-        echo "Sistema validado y listo para producción"
+  # ---------------------------------------------------------------------------
+  #  Imagen y pila completa
+  # ---------------------------------------------------------------------------
+  imagen:
+    name: Imagen y pila completa
+    runs-on: ubuntu-latest
+    needs: pruebas
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construir la imagen
+        run: docker build -t questcash:ci .
+
+      - name: Levantar la pila y comprobar que sirve
+        env:
+          POSTGRES_USER: questcash
+          POSTGRES_PASSWORD: contrasena-efimera-de-ci
+          POSTGRES_DB: questcash
+          SECRET_KEY: clave-de-ci-no-usar-fuera
+          JWT_SECRET_KEY: clave-jwt-de-ci
+          DATA_ENC_KEY: REDACTADO-VALOR-DE-PRUEBA
+          BLIND_INDEX_KEY: REDACTADO-VALOR-DE-PRUEBA
+        run: |
+          docker network create qc_ci
+          docker run -d --name qc_db --network qc_ci \
+            -e POSTGRES_USER -e POSTGRES_PASSWORD -e POSTGRES_DB postgres:15
+          docker run -d --name qc_cache --network qc_ci redis:7-alpine
+          # 2 workers: con uno, los defectos de concurrencia no se manifiestan.
+          docker run -d --name qc_web --network qc_ci -p 5002:5000 \
+            -e DATABASE_URL="postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@qc_db:5432/$POSTGRES_DB" \
+            -e DB_HOST=qc_db -e GUNICORN_WORKERS=2 -e REDIS_URL=redis://qc_cache:6379/0 \
+            -e SECRET_KEY -e JWT_SECRET_KEY -e DATA_ENC_KEY -e BLIND_INDEX_KEY \
+            questcash:ci
+
+          for i in $(seq 1 60); do
+            curl -fsS -o /dev/null http://localhost:5002/login && break || sleep 2
+          done
+          curl -fsS -o /dev/null http://localhost:5002/login
+
+      - name: Cabeceras de seguridad
+        run: |
+          cabeceras=$(curl -sI http://localhost:5002/login)
+          for h in "content-security-policy" "x-content-type-options" \
+                   "x-frame-options" "referrer-policy" "permissions-policy"; do
+            echo "$cabeceras" | grep -qi "^$h" || { echo "FALTA la cabecera $h"; exit 1; }
+          done
+          echo "las cinco cabeceras están presentes"
+
+      - name: No debe haber orígenes externos en la web
+        run: |
+          # Cargar código de un CDN en una aplicación financiera es un riesgo de
+          # cadena de suministro y una fuga de IP a terceros no declarados.
+          if curl -s http://localhost:5002/login | grep -qE 'src="https?://|href="https?://'; then
+            echo "la página carga recursos de un origen externo"; exit 1
+          fi
+          echo "sin orígenes externos"
+
+      - name: Concurrencia con varios workers
+        run: python tests/humo/concurrencia.py --url http://localhost:5002
+
+      - name: Logs si algo falló
+        if: failure()
+        run: docker logs qc_web

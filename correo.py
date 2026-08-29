@@ -76,15 +76,34 @@ def _construir(destinatario, asunto, texto, html=None):
     return mensaje
 
 
+def _cuerpo_de_texto(mensaje):
+    """Parte de texto plano de un mensaje, sea simple o multiparte.
+
+    `mensaje.get_content()` lanza KeyError sobre un multipart/alternative, que
+    es lo que produce cualquier correo con versión HTML. En modo consola eso
+    mataba el hilo de envío en silencio.
+    """
+    if mensaje.is_multipart():
+        parte = mensaje.get_body(preferencelist=("plain",))
+        if parte is not None:
+            return parte.get_content()
+        return "(sin parte de texto plano)"
+    return mensaje.get_content()
+
+
 def _enviar_ahora(mensaje, destinatario):
     cfg = _config()
     if not cfg["host"]:
-        # Modo consola. Se registra el cuerpo para poder seguir el flujo en
-        # desarrollo, pero NUNCA el enlace completo en producción: ver
-        # enviar_recuperacion().
+        # Modo consola: se registra el cuerpo para poder seguir el flujo en
+        # desarrollo. Solo ocurre sin proveedor configurado, y config.py exige
+        # uno en staging y production.
+        try:
+            cuerpo = _cuerpo_de_texto(mensaje)
+        except Exception:
+            cuerpo = "(no se pudo extraer el cuerpo)"
         logger.info(
             "[CORREO EN CONSOLA] para=%s asunto=%s\n%s",
-            destinatario, mensaje["Subject"], mensaje.get_content(),
+            destinatario, mensaje["Subject"], cuerpo,
         )
         return True
 
