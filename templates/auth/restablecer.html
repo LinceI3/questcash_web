@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-center">
+  <div class="qc-card p-4" style="max-width: 420px; width:100%;">
+        <h1 class="h4 fw-bold mb-1">Elige tu nueva contraseña</h1>
+        <p class="text-muted small">
+          Al guardarla se cerrarán todas las sesiones abiertas en otros
+          dispositivos.
+        </p>
+
+        <form method="POST" novalidate>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-3">
+            <label for="password" class="form-label">Nueva contraseña</label>
+            <input type="password" name="password" id="password" required
+                   class="form-control form-control-lg" autocomplete="new-password">
+            <div class="form-text">
+              Mínimo 8 caracteres, con una mayúscula, una minúscula y un número.
+            </div>
+          </div>
+          <div class="mb-3">
+            <label for="password2" class="form-label">Repítela</label>
+            <input type="password" name="password2" id="password2" required
+                   class="form-control form-control-lg" autocomplete="new-password">
+          </div>
+          <button type="submit" class="btn btn-primary btn-lg w-100">
+            Guardar contraseña
+          </button>
+        </form>
+  </div>
+</div>
+{% endblock %}

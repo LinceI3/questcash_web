@@ -104,6 +104,33 @@ def validar_registro(nombre, correo, password, password2):
     return errores
 
 
+def validar_password_nueva(password, password2, nombre=None, correo=None):
+    """Reglas de una contraseña nueva, compartidas por el registro, el cambio y
+    el restablecimiento. Antes vivían solo dentro de validar_registro, así que
+    cualquier flujo nuevo habría acabado duplicándolas o relajándolas."""
+    errores = []
+    if not password:
+        errores.append("La contraseña es obligatoria.")
+        return errores
+    if password != password2:
+        errores.append("Las contraseñas no coinciden.")
+    if len(password) < 8:
+        errores.append("La contraseña debe tener al menos 8 caracteres.")
+    if len(password) > 128:
+        errores.append("La contraseña es demasiado larga (máximo 128 caracteres).")
+    if not any(c.islower() for c in password):
+        errores.append("La contraseña debe incluir al menos una letra minúscula.")
+    if not any(c.isupper() for c in password):
+        errores.append("La contraseña debe incluir al menos una letra mayúscula.")
+    if not any(c.isdigit() for c in password):
+        errores.append("La contraseña debe incluir al menos un número.")
+    if nombre and password.lower() == nombre.lower():
+        errores.append("La contraseña no puede ser igual a tu nombre.")
+    if correo and password.lower() == correo.lower():
+        errores.append("La contraseña no puede ser igual a tu correo.")
+    return errores
+
+
 def validar_quest_form(nombre, monto_objetivo_raw, monto_actual_raw, fecha_limite_raw, descripcion, tipo):
     """Valida el formulario de creación/edición de una meta. Devuelve (errores, datos)."""
     errores = []

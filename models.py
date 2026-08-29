@@ -219,6 +219,44 @@ class Sesion(MarcasDeTiempo, db.Model):
         return self.revocada_en is None and self.expira_en > ahora
 
 
+class TokenCorreo(MarcasDeTiempo, db.Model):
+    """Token de un solo uso enviado por correo (recuperación de contraseña).
+
+    No se usa un token firmado tipo itsdangerous a propósito: un token firmado
+    es válido hasta que caduca y NO se puede invalidar antes. Aquí hace falta lo
+    contrario — que deje de servir en cuanto se usa, y que pedir uno nuevo
+    anule el anterior. Eso exige estado, y el estado vive aquí.
+
+    Del token solo se guarda su SHA-256, igual que con los refresh y las
+    contraseñas: quien lea esta tabla no puede restablecer la cuenta de nadie.
+    """
+
+    __tablename__ = "tokens_correo"
+
+    RECUPERACION = "recuperacion"
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
+    tipo = db.Column(db.String(30), nullable=False, default=RECUPERACION)
+
+    token_hash = db.Column(db.String(64), unique=True, index=True, nullable=False)
+    expira_en = db.Column(db.DateTime(timezone=True), nullable=False)
+    usado_en = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    # Desde dónde se pidió. Sirve para investigar si alguien reporta que le
+    # llegan correos de recuperación que no pidió.
+    ip_solicitud = db.Column(db.String(45), nullable=True)
+
+    usuario = db.relationship("Usuario")
+
+    __table_args__ = (
+        db.Index("ix_tokens_correo_usuario", "usuario_id", "tipo"),
+    )
+
+    def esta_vivo(self, ahora):
+        return self.usado_en is None and self.expira_en > ahora
+
+
 class Quest(MarcasDeTiempo, db.Model):
     __tablename__ = "quests"
 

@@ -43,13 +43,17 @@ from werkzeug.security import generate_password_hash, check_password_hash  # noq
 from password_hashing import hashear_password, necesita_rehash, verificar_password
 from ia.services.questy_engine import QuestyInput, evaluate_quest
 from validators import (
+    validar_password_nueva,
     validar_registro,
     validar_quest_form,
     validar_movimiento,
     validar_gasto,
 )
 from api import register_api
+import correo as correo_mod
 import rate_limit
+import tokens_correo
+from auth_jwt import revocar_todas_las_sesiones
 
 csrf = CSRFProtect()
 migrate = Migrate()
@@ -1959,6 +1963,127 @@ def create_app():
                 return render_template("auth/login.html")
 
         return render_template("auth/login.html")
+
+    def _url_app():
+        """Base pública para los enlaces que van por correo.
+
+        No se usa request.url_root: un enlace de recuperación construido con el
+        Host que mandó el cliente permite envenenarlo apuntando a otro sitio.
+        Se toma de la configuración del despliegue.
+        """
+        return os.environ.get("APP_URL", request.url_root).rstrip("/")
+
+    @app.route("/recuperar", methods=["GET", "POST"])
+    def recuperar_password():
+        """Pide un enlace de recuperación.
+
+        Responde SIEMPRE lo mismo, exista o no la cuenta. Antes no había forma
+        de recuperar una contraseña: quien la olvidaba perdía la cuenta y todo
+        su historial.
+        """
+        if request.method == "POST":
+            correo_usuario = request.form.get("correo", "").strip().lower()
+            ip = request.remote_addr or "unknown"
+
+            # Limita el envío por correo+IP para que esto no sirva de
+            # ametralladora de mensajes contra una dirección ajena.
+            bloqueo = rate_limit.segundos_de_bloqueo(f"recuperar:{correo_usuario}", ip)
+            if not bloqueo:
+                usuario = Usuario.por_correo(correo_usuario)
+                if usuario is not None:
+                    crudo = tokens_correo.emitir(usuario, ip=ip)
+                    db.session.commit()
+                    enlace = f"{_url_app()}/recuperar/{crudo}"
+                    correo_mod.enviar_recuperacion(
+                        correo_usuario, enlace, tokens_correo.MINUTOS_VALIDEZ
+                    )
+                elif re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", correo_usuario or ""):
+                    # Se manda un correo explicando que no hay cuenta. Es lo que
+                    # permite dar la misma respuesta en pantalla sin dejar a
+                    # nadie esperando un mensaje que nunca llega.
+                    correo_mod.enviar_aviso_sin_cuenta(correo_usuario)
+                rate_limit.registrar_fallo(f"recuperar:{correo_usuario}", ip)
+
+            flash(
+                "Si esa dirección tiene una cuenta en QuestCash, te enviamos un "
+                "enlace para restablecer la contraseña. Revisa tu correo.",
+                "info",
+            )
+            return redirect(url_for("login"))
+
+        return render_template("auth/recuperar.html")
+
+    @app.route("/recuperar/<token>", methods=["GET", "POST"])
+    def restablecer_password(token):
+        usuario, registro = tokens_correo.usuario_de(token)
+        if usuario is None:
+            flash(
+                "Ese enlace ya no es válido. Puede que haya caducado o que ya se "
+                "haya usado. Pide uno nuevo.",
+                "danger",
+            )
+            return redirect(url_for("recuperar_password"))
+
+        if request.method == "POST":
+            password = request.form.get("password", "")
+            password2 = request.form.get("password2", "")
+
+            errores = validar_password_nueva(password, password2, usuario.nombre)
+            if errores:
+                for e in errores:
+                    flash(e, "danger")
+                return render_template("auth/restablecer.html", token=token)
+
+            usuario.password_hash = hashear_password(password)
+            tokens_correo.consumir(registro)
+            # Cambiar la contraseña cierra todas las sesiones: si alguien había
+            # entrado con la contraseña vieja, deja de tener acceso ahora.
+            revocar_todas_las_sesiones(usuario, "cambio_password")
+            db.session.commit()
+
+            correo_mod.enviar_password_cambiada(usuario.correo)
+            session.clear()
+            flash(
+                "Tu contraseña se cambió y se cerraron todas las sesiones. "
+                "Inicia sesión con la nueva.",
+                "success",
+            )
+            return redirect(url_for("login"))
+
+        return render_template("auth/restablecer.html", token=token)
+
+    @app.route("/perfil/password", methods=["GET", "POST"])
+    @login_requerido
+    def cambiar_password():
+        """Cambio de contraseña con sesión iniciada. Exige la actual."""
+        if request.method == "POST":
+            actual = request.form.get("password_actual", "")
+            password = request.form.get("password", "")
+            password2 = request.form.get("password2", "")
+
+            errores = []
+            if not verificar_password(g.usuario_actual.password_hash, actual):
+                errores.append("La contraseña actual no es correcta.")
+            errores += validar_password_nueva(password, password2, g.usuario_actual.nombre)
+
+            if errores:
+                for e in errores:
+                    flash(e, "danger")
+                return render_template("auth/cambiar_password.html")
+
+            g.usuario_actual.password_hash = hashear_password(password)
+            revocar_todas_las_sesiones(g.usuario_actual, "cambio_password")
+            db.session.commit()
+            correo_mod.enviar_password_cambiada(g.usuario_actual.correo)
+
+            flash(
+                "Contraseña actualizada. Se cerraron las sesiones abiertas en "
+                "otros dispositivos.",
+                "success",
+            )
+            return redirect(url_for("perfil"))
+
+        return render_template("auth/cambiar_password.html")
 
     @app.route("/logout")
     @login_requerido

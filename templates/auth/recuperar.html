@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-center">
+  <div class="qc-card p-4" style="max-width: 420px; width:100%;">
+        <h1 class="h4 fw-bold mb-1">Restablecer contraseña</h1>
+        <p class="text-muted small">
+          Escribe el correo de tu cuenta y te enviamos un enlace para elegir una
+          contraseña nueva.
+        </p>
+
+        <form method="POST" novalidate>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-3">
+            <label for="correo" class="form-label">Correo electrónico</label>
+            <input type="email" name="correo" id="correo" required
+                   class="form-control form-control-lg"
+                   placeholder="ejemplo@correo.com" autocomplete="email">
+          </div>
+          <button type="submit" class="btn btn-primary btn-lg w-100">
+            Enviarme el enlace
+          </button>
+        </form>
+
+        <p class="text-center text-muted small mt-3 mb-0">
+          <a href="{{ url_for('login') }}">Volver a iniciar sesión</a>
+        </p>
+  </div>
+</div>
+{% endblock %}

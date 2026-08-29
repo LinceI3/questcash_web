@@ -42,6 +42,13 @@ services:
 
       # --- Ajustes propios de desarrollo ---------------------------------
       REDIS_URL: redis://cache:6379/0
+
+      # --- Correo: en local va a Mailpit, que no reenvía nada a nadie ------
+      MAIL_SMTP_HOST: correo
+      MAIL_SMTP_PUERTO: 1025
+      MAIL_SMTP_TLS: 0
+      MAIL_REMITENTE: no-responder@questcash.local
+      APP_URL: http://localhost:5001
       GUNICORN_WORKERS: 1
       GUNICORN_RELOAD: 1
       PYTHONDONTWRITEBYTECODE: 1
@@ -57,6 +64,8 @@ services:
         condition: service_healthy
       cache:
         condition: service_healthy
+      correo:
+        condition: service_started
 
   db:
     image: postgres:15
@@ -77,6 +86,21 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # Servidor SMTP de mentira para desarrollo: recibe todo el correo que manda
+  # la aplicación y NO lo reenvía a ninguna dirección real. La bandeja se ve en
+  # http://localhost:8025 — permite revisar cómo le llega un correo al usuario
+  # sin haber contratado ningún proveedor y sin arriesgarse a escribirle a
+  # alguien de verdad desde una máquina de desarrollo.
+  correo:
+    image: axllent/mailpit:latest
+    container_name: questcash_correo
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"   # bandeja web
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
 
   # Estado compartido entre procesos: control de intentos de inicio de sesión.
   # Sin esto, cada worker de gunicorn lleva su propia cuenta y un atacante

@@ -123,6 +123,12 @@ if ES_DESPLIEGUE_REAL:
     for clave in ("DATA_ENC_KEY", "BLIND_INDEX_KEY"):
         _exigido(clave)
 
+    # Sin proveedor de correo no hay recuperación de contraseña, y sin
+    # recuperación un usuario que olvida la suya pierde la cuenta. En
+    # desarrollo se tolera el modo consola; en un despliegue real, no.
+    _exigido("MAIL_SMTP_HOST")
+    _exigido("MAIL_REMITENTE")
+
     if Config.SQLALCHEMY_DATABASE_URI.startswith("sqlite"):
         raise RuntimeError(
             f"DATABASE_URL apunta a SQLite y ENTORNO={ENTORNO}. Usa PostgreSQL: "
