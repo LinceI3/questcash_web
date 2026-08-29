@@ -458,14 +458,36 @@ class CategoriaGasto(MarcasDeTiempo, db.Model):
     __tablename__ = "categorias_gasto"
 
     id = db.Column(db.Integer, primary_key=True)
-    nombre = db.Column(db.String(50), nullable=False, unique=True)
-    tipo = db.Column(db.String(20))  # opcional: 'fijo', 'variable', etc.
-    color = db.Column(db.String(20))  # opcional, para usar en gráficas/chips
+    nombre = db.Column(db.String(50), nullable=False)
 
+    # Dueño de la categoría. NULL = categoría del sistema, común a todo el
+    # mundo y de solo lectura.
+    #
+    # Antes esta tabla era global y escribible por cualquiera: el nombre venía
+    # del cliente sin lista blanca y se servía entero a todos los usuarios. Un
+    # usuario podía hacer que los demás vieran texto que él eligió, y la tabla
+    # crecía sin límite con una petición por categoría inventada.
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=True)
+
+    tipo = db.Column(db.String(20))   # opcional: 'fijo', 'variable', etc.
+    color = db.Column(db.String(20))  # opcional, para gráficas y chips
+
+    usuario = db.relationship("Usuario")
     gastos = db.relationship("Gasto", back_populates="categoria", lazy=True)
 
+    __table_args__ = (
+        # Unicidad POR DUEÑO, no global: dos personas pueden tener cada una su
+        # categoría "Mascotas" sin pisarse.
+        db.UniqueConstraint("usuario_id", "nombre", name="uq_categoria_por_usuario"),
+        db.Index("ix_categorias_usuario", "usuario_id"),
+    )
+
+    @property
+    def es_del_sistema(self) -> bool:
+        return self.usuario_id is None
+
     def __repr__(self):
-        return f"<CategoriaGasto {self.nombre}>"
+        return f"<CategoriaGasto {self.nombre} usuario={self.usuario_id}>"
 
 
 class Gasto(MarcasDeTiempo, db.Model):

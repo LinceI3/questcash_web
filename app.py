@@ -54,6 +54,10 @@ from validators import (
     validar_gasto,
 )
 from api import register_api
+from services import gastos as gastos_svc
+from services import insignias as insignias_svc
+from services import puntos as puntos_svc
+from services import rachas, rangos
 import correo as correo_mod
 import rate_limit
 import tokens_correo
@@ -72,62 +76,11 @@ BLOQUEO_MINUTOS = rate_limit.BLOQUEO_SEGUNDOS // 60
 
 # ----------------- Insignias: semillas y helpers -----------------
 def seed_insignias():
-    """Crea un set básico de insignias si no existen."""
-    base = [
-        {
-            "codigo": "PRIMER_AHORRO",
-            "nombre": "Primer ahorro registrado",
-            "descripcion": "Registraste tu primer aporte de ahorro.",
-            "rareza": "común",
-            "icono": "primer_ahorro.png",
-        },
-        {
-            "codigo": "PRIMERA_META",
-            "nombre": "Primera meta creada",
-            "descripcion": "Creaste tu primera meta en QuestCash.",
-            "rareza": "rara",
-            "icono": "Primera_meta.png",
-        },
-        {
-            "codigo": "PRIMER_RETO",
-            "nombre": "Primer reto completado",
-            "descripcion": "Completaste tu primer reto de ahorro.",
-            "rareza": "épica",
-            "icono": "primer_reto.png",
-        },
-        {
-            "codigo": "AHORRO_1000",
-            "nombre": "Has ahorrado $1,000 MXN",
-            "descripcion": "Alcanzaste un total acumulado de $1,000 MXN.",
-            "rareza": "legendaria",
-            "icono": "Ahorro_1000.png",
-        },
-        {
-            "codigo": "META_A_TIEMPO",
-            "nombre": "Meta cumplida a tiempo",
-            "descripcion": "Completaste un reto antes o justo en la fecha límite.",
-            "rareza": "mítica",
-            "icono": "Meta_tiempo.png",
-        },
-    ]
-
-    for data in base:
-        if not Insignia.query.filter_by(codigo=data["codigo"]).first():
-            db.session.add(Insignia(**data))
-    db.session.commit()
-    ahorro = Insignia.query.filter_by(codigo="AHORRO_1000").first()
-    if ahorro and ahorro.icono != "Ahorro_1000.png":
-        ahorro.icono = "Ahorro_1000.png"
-        db.session.commit()
+    """Compatibilidad: el catálogo vive en services/insignias.py."""
+    insignias_svc.sembrar()
 
 
-RAREZA_COLORS = {
-    "común": "#22C55E",
-    "rara": "#2563EB",
-    "épica": "#9333EA",
-    "legendaria": "#F59E0B",
-    "mítica": "#EC4899",
-}
+RAREZA_COLORS = insignias_svc.COLOR_POR_RAREZA
 
 
 def crear_notificacion(usuario, tipo, titulo, mensaje, icono=None, color=None, quest=None):
@@ -261,117 +214,12 @@ def create_app():
         # Permite usar {{ csrf_token() }} en las plantillas
         return dict(csrf_token=generate_csrf)
 
-    PROFILE_RANKS = [
-        {
-            "key": "recluta",
-            "name": "Recluta del Ahorro",
-            "min_points": 0,
-            "color": "#9CA3AF",
-            "accent": "#E5E7EB",
-        },
-        {
-            "key": "cabo",
-            "name": "Cabo Financiero",
-            "min_points": 250,
-            "color": "#22C55E",
-            "accent": "#BBF7D0",
-        },
-        {
-            "key": "sargento",
-            "name": "Sargento del Ahorro",
-            "min_points": 700,
-            "color": "#3B82F6",
-            "accent": "#BFDBFE",
-        },
-        {
-            "key": "veterano",
-            "name": "Veterano Financiero",
-            "min_points": 1400,
-            "color": "#8B5CF6",
-            "accent": "#DDD6FE",
-        },
-        {
-            "key": "comandante",
-            "name": "Comandante del Ahorro",
-            "min_points": 2400,
-            "color": "#DC2626",
-            "accent": "#FECACA",
-        },
-        {
-            "key": "elite",
-            "name": "Élite Financiero",
-            "min_points": 3800,
-            "color": "#F59E0B",
-            "accent": "#FDE68A",
-        },
-        {
-            "key": "leyenda",
-            "name": "Leyenda Quest",
-            "min_points": 6000,
-            "color": "#FACC15",
-            "accent": "#FEF08A",
-        },
-        {
-            "key": "jefe_maestro",
-            "name": "Jefe Maestro del Ahorro",
-            "min_points": 9000,
-            "color": "#10B981",
-            "accent": "#FBBF24",
-        },
-    ]
-
-    def obtener_rango_perfil(puntos_totales):
-        puntos = int(puntos_totales or 0)
-        rango_actual = PROFILE_RANKS[0]
-        for rango in PROFILE_RANKS:
-            if puntos >= rango["min_points"]:
-                rango_actual = rango
-            else:
-                break
-        return rango_actual
-
-    def obtener_siguiente_rango_perfil(puntos_totales):
-        puntos = int(puntos_totales or 0)
-        for rango in PROFILE_RANKS:
-            if puntos < rango["min_points"]:
-                return rango
-        return None
-
-    def calcular_estado_rango_perfil(puntos_totales):
-        puntos = int(puntos_totales or 0)
-        rango_actual = obtener_rango_perfil(puntos)
-        siguiente_rango = obtener_siguiente_rango_perfil(puntos)
-
-        piso_actual = int(rango_actual["min_points"])
-        if siguiente_rango:
-            techo_siguiente = int(siguiente_rango["min_points"])
-            tramo_total = max(techo_siguiente - piso_actual, 1)
-            progreso_tramo = puntos - piso_actual
-            progreso_pct = max(0.0, min((progreso_tramo / tramo_total) * 100, 100.0))
-            puntos_restantes = max(techo_siguiente - puntos, 0)
-        else:
-            techo_siguiente = None
-            tramo_total = 0
-            progreso_tramo = 0
-            progreso_pct = 100.0
-            puntos_restantes = 0
-
-        return {
-            "current": rango_actual,
-            "next": siguiente_rango,
-            "current_name": rango_actual["name"],
-            "current_key": rango_actual["key"],
-            "current_color": rango_actual["color"],
-            "current_accent": rango_actual["accent"],
-            "current_min_points": piso_actual,
-            "next_name": siguiente_rango["name"] if siguiente_rango else None,
-            "next_min_points": techo_siguiente,
-            "points": puntos,
-            "points_into_rank": max(progreso_tramo, 0),
-            "points_remaining": puntos_restantes,
-            "progress_percent": round(progreso_pct, 1),
-            "is_max_rank": siguiente_rango is None,
-        }
+    # El escalafón y su aritmética viven en services/rangos.py: son funciones
+    # puras y no tienen por qué estar dentro de una factory de Flask.
+    PROFILE_RANKS = rangos.RANGOS
+    obtener_rango_perfil = rangos.rango_de
+    obtener_siguiente_rango_perfil = rangos.siguiente_rango
+    calcular_estado_rango_perfil = rangos.estado
 
     def emitir_flash_logro(titulo, mensaje, extra=None):
         payload = {
@@ -645,62 +493,8 @@ def create_app():
 
     # ----------------- Dificultad automática -----------------
 
-    def calcular_dificultad(monto_objetivo, fecha_limite, fecha_creacion=None):
-        if fecha_creacion is None:
-            fecha_creacion = date.today()
-
-        if not monto_objetivo or monto_objetivo <= 0:
-            return "desconocida"
-
-        dias_plazo = (fecha_limite - fecha_creacion).days
-        if dias_plazo <= 0:
-            dias_plazo = 1
-
-        ahorro_por_dia = monto_objetivo / dias_plazo
-
-        if ahorro_por_dia < 50:
-            return "fácil"
-        elif ahorro_por_dia < 150:
-            return "media"
-        else:
-            return "difícil"
-
-    # ----------------- Puntos (fórmula tipo Apple Fitness) -----------------
-
-    def calcular_puntos_quest(monto_objetivo, fecha_limite, dificultad, tipo, fecha_creacion=None):
-        if fecha_creacion is None:
-            fecha_creacion = date.today()
-
-        if not monto_objetivo or monto_objetivo <= 0:
-            return 0
-
-        dias_plazo = (fecha_limite - fecha_creacion).days
-        if dias_plazo <= 0:
-            dias_plazo = 1
-
-        # 1) Score por monto
-        monto_seguro = max(monto_objetivo, 1)
-        score_monto = math.log10(monto_seguro) * 25
-
-        # 2) Score por plazo
-        score_plazo = (30 / dias_plazo) * 30
-        score_plazo = min(score_plazo, 60)
-
-        # 3) Score por dificultad
-        dificultad_txt = (dificultad or "").lower()
-        if "dificil" in dificultad_txt or "difícil" in dificultad_txt:
-            score_riesgo = 20
-        elif "media" in dificultad_txt:
-            score_riesgo = 10
-        else:
-            score_riesgo = 0
-
-        # 4) Extra por colaborativo
-        score_extra = 15 if tipo == "colaborativo" else 0
-
-        puntos = score_monto + score_plazo + score_riesgo + score_extra
-
-        return max(5, int(round(puntos)))
+    calcular_dificultad = puntos_svc.dificultad
+    calcular_puntos_quest = puntos_svc.puntos_de_meta
 
     def otorgar_puntos_por_completado(quest, events=None):
         """
@@ -1588,64 +1382,7 @@ def create_app():
 
 
     # ----------------- Rachas de ahorro: días consecutivos con aportes -----------------
-    def calcular_rachas_usuario(usuario):
-        """
-        Calcula la racha actual de días con aportes y la mejor racha histórica
-        para un usuario, usando únicamente movimientos de tipo 'aporte'.
-        La racha se mide en días consecutivos con al menos un aporte.
-        """
-        # Obtener todos los aportes del usuario ordenados por fecha ascendente
-        movs = (
-            Movimiento.query
-            .filter(
-                Movimiento.usuario_id == usuario.id,
-                Movimiento.tipo == "aporte",
-            )
-            .order_by(Movimiento.fecha.asc())
-            .all()
-        )
-
-        if not movs:
-            return {
-                "racha_actual": 0,
-                "mejor_racha": 0,
-                "ultimo_dia": None,
-            }
-
-        # Usar solo la parte de fecha (sin horas) y evitar días duplicados
-        dias_unicos = sorted({m.fecha.date() for m in movs})
-
-        racha_actual = 0
-        mejor_racha = 0
-        ultimo_dia = None
-
-        for d in dias_unicos:
-            if ultimo_dia is None:
-                # Primer día con aporte
-                racha_actual = 1
-            else:
-                diferencia = (d - ultimo_dia).days
-                if diferencia == 1:
-                    # Día inmediatamente siguiente: se extiende la racha
-                    racha_actual += 1
-                elif diferencia > 1:
-                    # Hubo un corte de al menos un día sin aporte: racha nueva
-                    racha_actual = 1
-                # Si diferencia == 0 no debería ocurrir porque usamos set(), pero lo ignoramos
-
-            if racha_actual > mejor_racha:
-                mejor_racha = racha_actual
-
-            ultimo_dia = d
-
-        # La racha actual es la racha del último bloque de días consecutivos;
-        # mejor_racha es el máximo histórico.
-        return {
-            "racha_actual": racha_actual,
-            "mejor_racha": mejor_racha,
-            "ultimo_dia": ultimo_dia,
-        }
-
+    calcular_rachas_usuario = rachas.calcular_de_usuario
 
     def otorgar_bonus_racha(usuario, rachas_antes, rachas_despues, events=None):
         """
@@ -1697,87 +1434,40 @@ def create_app():
 
 
     def otorgar_insignia(codigo, usuario, events=None):
-        """Otorga una insignia al usuario si no la tenía ya."""
-        insignia = Insignia.query.filter_by(codigo=codigo).first()
-        if not insignia:
-            return
-
-        ya = UsuarioInsignia.query.filter_by(
-            usuario_id=usuario.id,
-            insignia_id=insignia.id
-        ).first()
-
-        if ya:
-            return
-
-        nueva = UsuarioInsignia(
-            usuario_id=usuario.id,
-            insignia_id=insignia.id,
+        """Delega en services/insignias. El aviso emergente es un efecto de la
+        web, así que entra por callback y no ensucia el servicio."""
+        def avisar(insignia):
+            emitir_flash_logro(
+                titulo="Logro desbloqueado",
+                mensaje=insignia.nombre,
+                extra={
+                    "rareza": insignia.rareza,
+                    "icono": insignia.icono,
+                    "codigo": insignia.codigo,
+                    "descripcion": insignia.descripcion,
+                },
+            )
+        return insignias_svc.otorgar(
+            codigo, usuario, events=events,
+            al_otorgar=avisar, crear_notificacion=crear_notificacion,
         )
-        db.session.add(nueva)
-        # Sin commit aquí; se hará en la vista que llama
-        emitir_flash_logro(
-            titulo="Logro desbloqueado",
-            mensaje=f"{insignia.nombre}",
-            extra={
-                "rareza": insignia.rareza,
-                "icono": insignia.icono,
-                "codigo": insignia.codigo,
-                "descripcion": insignia.descripcion,
-            },
-        )
-        crear_notificacion(
-            usuario,
-            tipo="insignia_nueva",
-            titulo="Nueva insignia",
-            mensaje=f"Desbloqueaste la insignia {insignia.nombre}.",
-            icono="shield-checkmark",
-            color=RAREZA_COLORS.get((insignia.rareza or "").lower(), "#FBBF24"),
-        )
-        if events is not None:
-            events.append({
-                "type": "insignia",
-                "codigo": insignia.codigo,
-                "nombre": insignia.nombre,
-                "descripcion": insignia.descripcion,
-                "rareza": insignia.rareza,
-                "icono": insignia.icono,
-            })
 
     def checar_insignias_por_evento(usuario, evento, quest=None, events=None):
-        """Evalúa y otorga insignias según un evento usando los códigos nuevos."""
-
-        # 1) Primer ahorro registrado
-        if evento == "primer_movimiento":
-            total_movs = Movimiento.query.filter_by(usuario_id=usuario.id, tipo="aporte").count()
-            if total_movs == 1:
-                otorgar_insignia("PRIMER_AHORRO", usuario, events=events)
-
-            # Insignia de ahorro total de $1000 o más
-            total_ahorrado = (
-                db.session.query(db.func.sum(Movimiento.monto))
-                .filter_by(usuario_id=usuario.id, tipo="aporte")
-                .scalar() or 0
+        def avisar(insignia):
+            emitir_flash_logro(
+                titulo="Logro desbloqueado",
+                mensaje=insignia.nombre,
+                extra={
+                    "rareza": insignia.rareza,
+                    "icono": insignia.icono,
+                    "codigo": insignia.codigo,
+                    "descripcion": insignia.descripcion,
+                },
             )
-            if total_ahorrado >= 1000:
-                otorgar_insignia("AHORRO_1000", usuario, events=events)
-
-        # 2) Primera meta creada
-        elif evento == "primer_reto_creado":
-            total_quests = Quest.query.filter_by(usuario_id=usuario.id).count()
-            if total_quests == 1:
-                otorgar_insignia("PRIMERA_META", usuario, events=events)
-
-        # 3) Primer reto completado
-        elif evento == "reto_completado" and quest is not None:
-            # Siempre otorgar la épica
-            otorgar_insignia("PRIMER_RETO", usuario, events=events)
-
-            # Meta cumplida a tiempo (antes o justo en fecha límite)
-            if quest.fecha_limite and quest.monto_actual >= quest.monto_objetivo:
-                hoy = date.today()
-                if hoy <= quest.fecha_limite:
-                    otorgar_insignia("META_A_TIEMPO", usuario, events=events)
+        return insignias_svc.revisar_evento(
+            usuario, evento, quest=quest, events=events,
+            al_otorgar=avisar, crear_notificacion=crear_notificacion,
+        )
 
     def bloquear_quest(quest_id):
         """Relee la meta tomando un bloqueo de fila hasta el fin de la transacción.
@@ -2535,24 +2225,10 @@ def create_app():
             fecha_generacion=fecha_generacion,
         )
 
-    def obtener_o_crear_categoria_gasto(nombre_raw):
-        """ 
-        Normaliza el nombre de categoría y la crea si no existe.
-        Las categorías son globales (compartidas entre usuarios).
-        """
-        nombre = (nombre_raw or "").strip()
-        if not nombre:
-            nombre = "Otros"
-
-        # Normalizar para que se vea bonito en UI
-        nombre = nombre.capitalize()
-
-        categoria = CategoriaGasto.query.filter_by(nombre=nombre).first()
-        if not categoria:
-            categoria = CategoriaGasto(nombre=nombre)
-            db.session.add(categoria)
-            db.session.commit()
-        return categoria
+    def obtener_o_crear_categoria_gasto(nombre_raw, usuario=None):
+        """Delega en services/gastos. Las categorías son del sistema o del
+        usuario que las creó; ya no hay una tabla global escribible por todos."""
+        return gastos_svc.obtener_o_crear(nombre_raw, usuario or g.usuario_actual)
 
     @app.route("/gastos")
     @login_requerido
@@ -2576,7 +2252,7 @@ def create_app():
 
         total_mes = float(sum(g.monto for g in gastos) or 0) if gastos else 0.0
 
-        categorias = CategoriaGasto.query.order_by(CategoriaGasto.nombre).all()
+        categorias = gastos_svc.visibles_para(g.usuario_actual)
 
         return render_template(
             "gastos/list.html",
@@ -2603,7 +2279,7 @@ def create_app():
                 for e in errores:
                     flash(e, "danger")
 
-                categorias = CategoriaGasto.query.order_by(CategoriaGasto.nombre).all()
+                categorias = gastos_svc.visibles_para(g.usuario_actual)
                 hoy_iso = date.today().strftime("%Y-%m-%d")
                 return render_template(
                     "gastos/form.html",
@@ -2641,7 +2317,7 @@ def create_app():
             return redirect(url_for("listar_gastos"))
 
         # GET: cargar formulario
-        categorias = CategoriaGasto.query.order_by(CategoriaGasto.nombre).all()
+        categorias = gastos_svc.visibles_para(g.usuario_actual)
         hoy_iso = date.today().strftime("%Y-%m-%d")
 
         return render_template(
@@ -3186,6 +2862,7 @@ def create_app():
     api_ctx = {
         "PROFILE_RANKS": PROFILE_RANKS,
         "calcular_estado_rango_perfil": calcular_estado_rango_perfil,
+        "calcular_estadisticas": calcular_estadisticas,
         "obtener_quests_usuario": obtener_quests_usuario,
         "usuario_participa_en_quest": usuario_participa_en_quest,
         "generar_notificaciones": generar_notificaciones,

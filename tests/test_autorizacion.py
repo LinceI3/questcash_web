@@ -109,3 +109,43 @@ def test_el_correo_ajeno_no_se_expone_a_otros_participantes(cliente, crear_usuar
         datos = cliente.get(f"/api/v1/quests/{meta}", headers=cab).get_json()
         for p in datos["participaciones"]:
             assert "correo" not in p["usuario"], "el correo de un participante quedó expuesto"
+
+
+def test_las_categorias_propias_no_se_ven_entre_usuarios(cliente, crear_usuario, auth):
+    """La tabla era global y escribible por cualquiera: el nombre venía del
+    cliente sin validar y se servía entero a todos. Un usuario podía hacer que
+    los demás vieran texto que él eligió, y la tabla crecía sin límite."""
+    ana, beto = crear_usuario(nombre="Ana"), crear_usuario(nombre="Beto")
+    cab_ana, cab_beto = auth(ana["access"]), auth(beto["access"])
+
+    cliente.post("/api/v1/gastos", headers=cab_ana,
+                 json={"monto": "10.00", "categoria": "Categoria secreta de ana"})
+
+    de_beto = [c["nombre"] for c in
+               cliente.get("/api/v1/categorias-gasto", headers=cab_beto).get_json()["categorias"]]
+    de_ana = [c["nombre"] for c in
+              cliente.get("/api/v1/categorias-gasto", headers=cab_ana).get_json()["categorias"]]
+
+    assert "Categoria secreta de ana" in de_ana
+    assert "Categoria secreta de ana" not in de_beto
+    # Las del sistema sí las ven los dos.
+    assert "Comida" in de_ana and "Comida" in de_beto
+
+
+def test_dos_usuarios_pueden_tener_la_misma_categoria(cliente, crear_usuario, auth):
+    """La unicidad es por dueño: dos personas pueden tener cada una su
+    categoría "Mascotas" sin pisarse."""
+    ana, beto = crear_usuario(nombre="Ana"), crear_usuario(nombre="Beto")
+    for u in (ana, beto):
+        r = cliente.post("/api/v1/gastos", headers=auth(u["access"]),
+                         json={"monto": "10.00", "categoria": "Mascotas"})
+        assert r.status_code == 201
+
+
+def test_un_nombre_de_categoria_larguisimo_no_revienta(cliente, crear_usuario, auth):
+    """Antes, más de 50 caracteres reventaban la restricción de columna con un
+    500. Un nombre largo es un dato del usuario, no un fallo del servidor."""
+    u = crear_usuario(); cab = auth(u["access"])
+    r = cliente.post("/api/v1/gastos", headers=cab,
+                     json={"monto": "10.00", "categoria": "x" * 300})
+    assert r.status_code == 201

@@ -19,6 +19,8 @@ from werkzeug.security import check_password_hash, generate_password_hash  # noq
 from password_hashing import hashear_password, necesita_rehash, verificar_password
 
 import rate_limit
+from services import gastos as gastos_svc
+from services import rangos
 import correo as correo_mod
 import rate_limit
 import tokens_correo
@@ -371,6 +373,7 @@ def register_api(app, csrf, ctx):
 
     PROFILE_RANKS = ctx["PROFILE_RANKS"]
     calcular_estado_rango_perfil = ctx["calcular_estado_rango_perfil"]
+    calcular_estadisticas = ctx["calcular_estadisticas"]
     obtener_quests_usuario = ctx["obtener_quests_usuario"]
     usuario_participa_en_quest = ctx["usuario_participa_en_quest"]
     generar_notificaciones = ctx["generar_notificaciones"]
@@ -389,18 +392,8 @@ def register_api(app, csrf, ctx):
     MAX_LOGIN_INTENTOS = ctx["MAX_LOGIN_INTENTOS"]
     BLOQUEO_MINUTOS = ctx["BLOQUEO_MINUTOS"]
 
-    def _augment_rank_state(rank_state):
-        """Añade `level`/`total_levels` (posición en PROFILE_RANKS) para que el
-        cliente móvil pueda mapear el sistema de rangos a un "nivel" numérico
-        sin tener que duplicar la tabla PROFILE_RANKS."""
-        rank_state = dict(rank_state)
-        idx = next(
-            (i for i, r in enumerate(PROFILE_RANKS) if r["key"] == rank_state["current_key"]),
-            0,
-        )
-        rank_state["level"] = idx + 1
-        rank_state["total_levels"] = len(PROFILE_RANKS)
-        return rank_state
+    # La numeración del escalafón vive con el escalafón, en services/rangos.py.
+    _augment_rank_state = rangos.con_nivel
 
     def _load_quest(quest_id):
         return Quest.query.get(quest_id)
@@ -542,6 +535,30 @@ def register_api(app, csrf, ctx):
             }
             for s in sesiones if s.esta_viva(ahora)
         ]})
+
+    @api_bp.route("/estadisticas", methods=["GET"])
+    @jwt_required
+    def api_estadisticas():
+        """Series históricas de ahorro.
+
+        `calcular_estadisticas()` existía desde el principio pero solo la usaba
+        la vista HTML: la app móvil no podía construir su pantalla de
+        estadísticas porque la API no exponía esto. Era el último punto abierto
+        de la auditoría original de producto.
+        """
+        usuario = g.api_usuario
+        datos = calcular_estadisticas(usuario)
+        rachas_usuario = calcular_rachas_usuario(usuario)
+
+        return jsonify({
+            "resumen": {
+                **datos["resumen"],
+                "racha_actual": rachas_usuario["racha_actual"],
+                "mejor_racha": rachas_usuario["mejor_racha"],
+            },
+            "serie_30_dias": datos["serie_30_dias"],
+            "serie_por_meta": datos["serie_por_meta"],
+        })
 
     # ----------------- Contraseña y cuenta -----------------
 
@@ -946,6 +963,37 @@ def register_api(app, csrf, ctx):
         db.session.commit()
         return "", 204
 
+    def _paginar(consulta, columna_orden, limite_por_omision=50, limite_maximo=200):
+        """Paginación por cursor.
+
+        Se usa cursor y no `offset` porque con offset, insertar una fila
+        mientras alguien pagina desplaza el resto y repite o salta elementos.
+        El cursor es el id de la última fila devuelta: estable pase lo que pase.
+
+        Ningún endpoint paginaba: `/movimientos`, `/gastos` e `/insignias`
+        devolvían todo. Con historial de años, eso es una respuesta que crece
+        sin límite.
+        """
+        try:
+            limite = min(int(request.args.get("limit", limite_por_omision)), limite_maximo)
+        except (TypeError, ValueError):
+            limite = limite_por_omision
+        limite = max(limite, 1)
+
+        cursor = request.args.get("cursor")
+        if cursor:
+            try:
+                consulta = consulta.filter(columna_orden < int(cursor))
+            except (TypeError, ValueError):
+                pass
+
+        # Se pide uno de más para saber si hay página siguiente sin contar todo.
+        filas = consulta.order_by(columna_orden.desc()).limit(limite + 1).all()
+        hay_mas = len(filas) > limite
+        filas = filas[:limite]
+        siguiente = str(getattr(filas[-1], columna_orden.key)) if (hay_mas and filas) else None
+        return filas, {"next_cursor": siguiente, "has_more": hay_mas, "limit": limite}
+
     @api_bp.route("/quests/<int:quest_id>/movimientos", methods=["GET"])
     @jwt_required
     def api_listar_movimientos(quest_id):
@@ -956,13 +1004,13 @@ def register_api(app, csrf, ctx):
         if not usuario_participa_en_quest(usuario, quest):
             return jsonify({"error": "forbidden"}), 403
 
-        movimientos = (
-            Movimiento.query
-            .filter_by(quest_id=quest.id)
-            .order_by(Movimiento.fecha.desc())
-            .all()
+        movimientos, pagina = _paginar(
+            Movimiento.query.filter_by(quest_id=quest.id), Movimiento.id
         )
-        return jsonify({"movimientos": [serialize_movimiento(m) for m in movimientos]})
+        return jsonify({
+            "movimientos": [serialize_movimiento(m) for m in movimientos],
+            **pagina,
+        })
 
     @api_bp.route("/quests/<int:quest_id>/movimientos", methods=["POST"])
     @jwt_required
@@ -1248,7 +1296,7 @@ def register_api(app, csrf, ctx):
     @api_bp.route("/categorias-gasto", methods=["GET"])
     @jwt_required
     def api_listar_categorias_gasto():
-        categorias = CategoriaGasto.query.order_by(CategoriaGasto.nombre).all()
+        categorias = gastos_svc.visibles_para(g.api_usuario)
         return jsonify({
             "categorias": [{"id": c.id, "nombre": c.nombre, "color": c.color} for c in categorias]
         })
@@ -1270,7 +1318,7 @@ def register_api(app, csrf, ctx):
         if errores:
             return jsonify({"errors": errores}), 400
 
-        categoria = obtener_o_crear_categoria_gasto(categoria_nombre)
+        categoria = obtener_o_crear_categoria_gasto(categoria_nombre, usuario)
 
         es_hormiga = es_hormiga_flag
         if not es_hormiga_flag:
@@ -1300,7 +1348,7 @@ def register_api(app, csrf, ctx):
     @jwt_required
     def api_listar_insignias():
         usuario = g.api_usuario
-        todas_db = Insignia.query.order_by(Insignia.rareza, Insignia.nombre).all()
+        todas_db = Insignia.query.order_by(Insignia.rareza, Insignia.nombre).all()  # catálogo fijo y corto
 
         insignias_limpias = []
         codigos_vistos = set()

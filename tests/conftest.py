@@ -82,7 +82,9 @@ def aplicacion():
 
 def _sembrar_insignias():
     from app import seed_insignias
+    from services import gastos as gastos_svc
     seed_insignias()
+    gastos_svc.sembrar()
 
 
 @pytest.fixture(autouse=True)

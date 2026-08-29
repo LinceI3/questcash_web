@@ -101,8 +101,10 @@ def main() -> int:
         upgrade()
 
         # ---- 3. Semillas ---------------------------------------------------
-        print("Sembrando     : insignias base")
+        print("Sembrando     : insignias y categorías del sistema")
         seed_insignias()
+        from services import gastos as gastos_svc
+        gastos_svc.sembrar()
 
         print("Listo.")
     return 0
