@@ -90,3 +90,56 @@ def test_las_estadisticas_no_cruzan_usuarios(cliente, crear_usuario, auth):
     d = cliente.get("/api/v1/estadisticas", headers=cab_beto).get_json()
     assert d["resumen"]["total_ahorrado"] == 0
     assert d["serie_por_meta"]["labels"] == []
+
+
+def test_los_gastos_paginan_pero_el_total_no_miente(cliente, crear_usuario, auth):
+    """Los agregados se calculan sobre TODOS los gastos del período.
+
+    Paginar el cálculo daría un total que depende de cuántos elementos pidió el
+    cliente, que es exactamente el tipo de número en el que un usuario no puede
+    confiar.
+    """
+    u = crear_usuario(); cab = auth(u["access"])
+    for _ in range(12):
+        cliente.post("/api/v1/gastos", headers=cab,
+                     json={"monto": "10.00", "descripcion": "x", "categoria": "Comida"})
+
+    d = cliente.get("/api/v1/gastos?period=month&limit=5", headers=cab).get_json()
+    assert len(d["gastos"]) == 5
+    assert d["has_more"] is True
+    assert d["total_periodo"] == 120.00, "el total debe cubrir los 12, no los 5 de la página"
+    assert sum(c["monto"] for c in d["categorias"]) == 120.00
+
+
+def test_toda_la_api_esta_documentada(aplicacion):
+    """Un endpoint sin describir es un endpoint que nadie sabe usar.
+
+    El generador falla si encuentra alguno, así que esta prueba lo detecta sin
+    esperar al CI.
+    """
+    import json
+    import re
+    from pathlib import Path
+
+    especificacion = json.loads(Path("docs/openapi.json").read_text(encoding="utf-8"))
+
+    rutas_reales = set()
+    for regla in aplicacion.url_map.iter_rules():
+        if not str(regla).startswith("/api/v1/"):
+            continue
+        ruta = re.sub(r"<(?:int:)?(\w+)>", r"{\1}", str(regla)).replace("/api/v1", "")
+        for metodo in regla.methods - {"HEAD", "OPTIONS"}:
+            rutas_reales.add((metodo.lower(), ruta))
+
+    documentadas = {(m, r) for r, ops in especificacion["paths"].items() for m in ops}
+
+    faltan = rutas_reales - documentadas
+    sobran = documentadas - rutas_reales
+    assert not faltan, f"sin documentar: {sorted(faltan)}"
+    assert not sobran, f"documentadas pero inexistentes: {sorted(sobran)}"
+
+    sin_describir = [
+        f"{m} {r}" for r, ops in especificacion["paths"].items()
+        for m, o in ops.items() if o["summary"] == "(sin describir)"
+    ]
+    assert not sin_describir, f"sin descripción: {sin_describir}"

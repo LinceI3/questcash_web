@@ -1247,12 +1247,22 @@ def register_api(app, csrf, ctx):
 
         inicio, fin, inicio_anterior, fin_anterior = _rango_periodo(period)
 
-        gastos = (
+        # Los agregados del período (total, categorías, comparación con el
+        # período anterior) se calculan sobre TODOS los gastos: paginar eso
+        # daría un total falso. Lo que se pagina es la lista que se muestra.
+        gastos_todos = (
             Gasto.query
             .filter(Gasto.usuario_id == usuario.id, Gasto.fecha >= inicio, Gasto.fecha <= fin)
             .order_by(Gasto.fecha.desc())
             .all()
         )
+        gastos_pagina, pagina = _paginar(
+            Gasto.query.filter(
+                Gasto.usuario_id == usuario.id, Gasto.fecha >= inicio, Gasto.fecha <= fin
+            ),
+            Gasto.id,
+        )
+        gastos = gastos_todos
         # float() en el borde de lectura: de aquí en adelante son cifras de
         # presentación (porcentajes, variaciones), no aritmética de saldo.
         total_periodo = float(sum(gasto.monto for gasto in gastos) or 0)
@@ -1286,7 +1296,8 @@ def register_api(app, csrf, ctx):
             categorias.append({"nombre": nombre, "monto": monto, "porcentaje": porcentaje, "color": color})
 
         return jsonify({
-            "gastos": [serialize_gasto(gasto) for gasto in gastos],
+            "gastos": [serialize_gasto(gasto) for gasto in gastos_pagina],
+            **pagina,
             "period": period,
             "total_periodo": total_periodo,
             "categorias": categorias,

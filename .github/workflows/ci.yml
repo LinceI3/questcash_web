@@ -75,6 +75,15 @@ jobs:
       - name: Pruebas
         run: pytest -q --tb=short
 
+      - name: La documentación de la API está al día
+        run: |
+          # Se genera desde las rutas reales, así que no puede divergir del
+          # código sin que esto falle. Una documentación que miente manda al
+          # que la lee en dirección contraria: es peor que no tenerla.
+          python scripts/generar_openapi.py
+          git diff --exit-code docs/openapi.json \
+            || { echo "docs/openapi.json está desactualizado: regenéralo y commitea"; exit 1; }
+
       - name: Vulnerabilidades conocidas en las dependencias
         run: |
           pip install pip-audit
