@@ -1,3 +1,10 @@
+# Nota sobre la redacción
+# Los tokens y credenciales de este archivo se sustituyeron por marcadores.
+# Eran de cuentas de prueba, están caducados y su clave de firma se rotó,
+# pero un token con forma válida en un repositorio público es ruido que
+# entrena a ignorar las alertas de los detectores de secretos.
+# La evidencia conserva la estructura de cada petición y respuesta.
+
 
 ========================================================
  P0 - LOGIN con credenciales validas => devuelve JWT (200)
@@ -7,7 +14,7 @@ HTTP/1.1 200 OK
 Content-Type: application/json
 Content-Length: 202
 
-{"token":"REDACTADO-VALOR-DE-PRUEBA","user":{"correo":"armando@questcash.mx","id":1}}
+{"token":"eyJ<TOKEN-REDACTADO-EN-LA-EVIDENCIA>","user":{"correo":"armando@questcash.mx","id":1}}
 
 ========================================================
  P0b - LOGIN con contrasena incorrecta => 401 invalid_credentials
@@ -72,7 +79,7 @@ Content-Length: 26
 ========================================================
  P6 - Esquema de cabecera incorrecto (Basic en vez de Bearer) => 401 missing_token
 ========================================================
-$ curl -i $BASE/auth/me -H "Authorization: Basic REDACTADO-VALOR-DE-PRUEBA"
+$ curl -i $BASE/auth/me -H "Authorization: Basic <CREDENCIAL-REDACTADA>"
 HTTP/1.1 401 UNAUTHORIZED
 Content-Type: application/json
 Content-Length: 26

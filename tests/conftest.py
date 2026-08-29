@@ -56,9 +56,28 @@ os.environ["ENTORNO"] = "testing"
 os.environ["DATABASE_URL"] = URL_BASE
 os.environ.setdefault("SECRET_KEY", "clave-de-pruebas-no-usar-fuera")
 os.environ.setdefault("JWT_SECRET_KEY", "clave-jwt-de-pruebas")
-# Claves fijas: los datos cifrados tienen que poder leerse dentro de la prueba.
-os.environ.setdefault("DATA_ENC_KEY", "REDACTADO-VALOR-DE-PRUEBA")
-os.environ.setdefault("BLIND_INDEX_KEY", "REDACTADO-VALOR-DE-PRUEBA")
+
+def _clave_de_pruebas(etiqueta: str) -> str:
+    """Clave de 32 bytes derivada de una etiqueta.
+
+    Se DERIVA en vez de escribirse literal a propósito. Una cadena base64 de 32
+    bytes dentro de un archivo versionado es indistinguible de una clave de
+    verdad: los detectores de secretos la marcan —con razón, porque no pueden
+    saber que es de mentira— y acostumbrarse a ignorar esas alertas es
+    exactamente cómo se cuela una filtración real.
+
+    Es determinista para que los datos cifrados en una prueba se puedan leer en
+    la siguiente línea, y no tiene ningún valor fuera de aquí.
+    """
+    import base64
+    import hashlib
+    return base64.urlsafe_b64encode(
+        hashlib.sha256(f"questcash-pruebas-{etiqueta}".encode()).digest()
+    ).decode()
+
+
+os.environ.setdefault("DATA_ENC_KEY", _clave_de_pruebas("cifrado"))
+os.environ.setdefault("BLIND_INDEX_KEY", _clave_de_pruebas("indice-ciego"))
 # Sin REDIS_URL, rate_limit usa memoria de proceso: es lo que se quiere aquí,
 # para que una prueba no arrastre el estado de otra.
 os.environ.pop("REDIS_URL", None)

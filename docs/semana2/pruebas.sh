@@ -48,8 +48,8 @@ echo '$ curl -i $BASE/auth/me -H "Authorization: Bearer <token firmado por un te
 curl -s -i "$BASE/auth/me" -H "Authorization: Bearer $OTRO" | lim
 
 linea "P6 - Esquema de cabecera incorrecto (Basic en vez de Bearer) => 401 missing_token"
-echo '$ curl -i $BASE/auth/me -H "Authorization: Basic REDACTADO-VALOR-DE-PRUEBA"'
-curl -s -i "$BASE/auth/me" -H "Authorization: Basic REDACTADO-VALOR-DE-PRUEBA" | lim
+echo '$ curl -i $BASE/auth/me -H "Authorization: Basic <CREDENCIAL-REDACTADA>"'
+curl -s -i "$BASE/auth/me" -H "Authorization: Basic <CREDENCIAL-REDACTADA>" | lim
 
 linea "P7 - Segundo endpoint protegido /dashboard: sin token vs con token"
 printf '$ curl -o /dev/null -w "%%{http_code}" $BASE/dashboard                -> '; curl -s -o /dev/null -w "%{http_code}\n" "$BASE/dashboard"

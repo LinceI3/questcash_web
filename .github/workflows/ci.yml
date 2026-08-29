@@ -49,8 +49,6 @@ jobs:
       TEST_DATABASE_URL: postgresql://questcash:questcash@127.0.0.1:5432/questcash_test
       SECRET_KEY: clave-de-ci-no-usar-fuera
       JWT_SECRET_KEY: clave-jwt-de-ci
-      DATA_ENC_KEY: REDACTADO-VALOR-DE-PRUEBA
-      BLIND_INDEX_KEY: REDACTADO-VALOR-DE-PRUEBA
 
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +57,14 @@ jobs:
         with:
           python-version: "3.12"     # la misma del contenedor
           cache: pip
+
+      - name: Generar claves efímeras de esta ejecución
+        # No se escriben en el archivo: una cadena base64 de 32 bytes
+        # versionada es indistinguible de una clave real, y los detectores de
+        # secretos la marcan con razón. Estas viven lo que dura el job.
+        run: |
+          echo "DATA_ENC_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+          echo "BLIND_INDEX_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
 
       - name: Instalar dependencias
         run: pip install -r requirements.txt
@@ -84,6 +90,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Generar claves efímeras de esta ejecución
+        run: |
+          echo "DATA_ENC_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+          echo "BLIND_INDEX_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
       - name: Construir la imagen
         run: docker build -t questcash:ci .
 
@@ -94,8 +105,6 @@ jobs:
           POSTGRES_DB: questcash
           SECRET_KEY: clave-de-ci-no-usar-fuera
           JWT_SECRET_KEY: clave-jwt-de-ci
-          DATA_ENC_KEY: REDACTADO-VALOR-DE-PRUEBA
-          BLIND_INDEX_KEY: REDACTADO-VALOR-DE-PRUEBA
         run: |
           docker network create qc_ci
           docker run -d --name qc_db --network qc_ci \
