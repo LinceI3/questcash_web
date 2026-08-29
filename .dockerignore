@@ -31,6 +31,9 @@ instance/
 .DS_Store
 **/.DS_Store
 
+# static/vendor/ SÍ entra en la imagen: son las librerías de la web y sin
+# ellas la aplicación no renderiza.
+
 # --- Datos: se conserva únicamente el resumen que lee Questy ---
 data/raw/
 data/processed/*

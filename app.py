@@ -207,20 +207,26 @@ def create_app():
     # Orígenes de los que la web carga hoy código y estilos. Se listan
     # explícitamente: cualquier otro queda bloqueado por el navegador.
     #
-    # 'unsafe-inline' está aquí porque las plantillas todavía llevan 5 bloques
-    # <script>, 10 manejadores onclick y 32 atributos style en línea. Quitarlo
-    # es el objetivo, y llega solo cuando se autoalojen los CDN y se muevan
-    # esos manejadores a los .js de static/ (WEB-10, fase 4). Dejarlo dicho
-    # aquí es preferible a no poner CSP: sin ella no hay ninguna restricción.
+    # Ya no hay ningún origen externo: Bootstrap, sus iconos, three.js, GSAP y
+    # vanilla-tilt se sirven desde static/vendor/. Eso cierra tres cosas de
+    # golpe — el riesgo de que un CDN comprometido inyecte código en una app
+    # financiera, la fuga de la IP de cada visitante a tres terceros no
+    # declarados en ningún aviso de privacidad, y la dependencia de que esos
+    # servicios sigan disponibles.
+    #
+    # 'unsafe-inline' sigue en script-src y style-src porque las plantillas
+    # llevan bloques <script>, manejadores onclick y atributos style en línea.
+    # Quitarlo exige moverlos a static/js/, y es lo único que falta para tener
+    # una CSP estricta.
     CSP = "; ".join([
         "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com",
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
-        "font-src 'self' https://cdn.jsdelivr.net data:",
+        "script-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline'",
+        "font-src 'self' data:",
         "img-src 'self' data:",
         "connect-src 'self'",
-        "frame-ancestors 'none'",     # nadie puede embeber QuestCash en un iframe
-        "form-action 'self'",         # los formularios no pueden enviarse fuera
+        "frame-ancestors 'none'",
+        "form-action 'self'",
         "base-uri 'self'",
         "object-src 'none'",
     ])
